@@ -358,8 +358,13 @@ function renderList(list: HTMLElement, form: HTMLFormElement): void {
   const groups = groupBy === 'priority'
     ? (selectedPriority ? [selectedPriority] : ISSUE_PRIORITIES)
     : (selectedStatus ? [selectedStatus] : ISSUE_STATUSES);
+  const buckets = new Map<string, DashboardIssue[]>(groups.map(group => [group, []]));
+  for (const issue of rows) {
+    const key = groupBy === 'priority' ? issue.priority : issue.status;
+    buckets.get(key)?.push(issue);
+  }
   list.innerHTML = `<div class="issue-board">${groups.map(group => {
-    const groupedRows = rows.filter(issue => groupBy === 'priority' ? issue.priority === group : issue.status === group);
+    const groupedRows = buckets.get(group) ?? [];
     const title = groupBy === 'priority' ? priorityLabel(group) : statusLabel(group);
     return `<section class="issue-column-group">
       <header>
@@ -759,6 +764,7 @@ function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onCh
 
 export function wireIssuesPage(root: HTMLElement): () => void {
   let disposed = false;
+  let renderTimer: number | undefined;
   const list = root.querySelector<HTMLElement>('#issue-list')!;
   const form = root.querySelector<HTMLFormElement>('#issue-filters')!;
   const dialog = root.querySelector<HTMLDialogElement>('#issue-dialog')!;
@@ -770,11 +776,25 @@ export function wireIssuesPage(root: HTMLElement): () => void {
     await syncAllIssueGroupFields();
     if (!disposed) renderList(list, form);
   };
+  const renderNow = (): void => {
+    if (renderTimer !== undefined) {
+      window.clearTimeout(renderTimer);
+      renderTimer = undefined;
+    }
+    renderList(list, form);
+  };
+  const scheduleRender = (): void => {
+    if (renderTimer !== undefined) window.clearTimeout(renderTimer);
+    renderTimer = window.setTimeout(() => {
+      renderTimer = undefined;
+      renderList(list, form);
+    }, 120);
+  };
 
   createBtn.onclick = () => openEditor(dialog, undefined, () => { void reload(); });
   refreshBtn.onclick = () => { void reload(); };
-  form.addEventListener('input', () => renderList(list, form));
-  form.addEventListener('change', () => renderList(list, form));
+  form.addEventListener('input', scheduleRender);
+  form.addEventListener('change', renderNow);
 
   list.addEventListener('click', ev => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
@@ -860,5 +880,8 @@ export function wireIssuesPage(root: HTMLElement): () => void {
 
   list.innerHTML = `<div class="empty">${escapeHtml(t('issues.loading'))}</div>`;
   void reload();
-  return () => { disposed = true; };
+  return () => {
+    disposed = true;
+    if (renderTimer !== undefined) window.clearTimeout(renderTimer);
+  };
 }

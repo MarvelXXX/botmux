@@ -6,6 +6,7 @@ import {
   createIssue,
   getIssue,
   listIssues,
+  readIssueStore,
   recordIssueStart,
   updateIssue,
 } from '../src/services/issue-store.js';
@@ -101,5 +102,27 @@ describe('issue-store', () => {
     expect(getIssue('iss_active', dataDir)?.priority).toBe('P2');
     expect(getIssue('iss_failed', dataDir)?.status).toBe('pending');
     expect(getIssue('iss_failed', dataDir)?.priority).toBe('P1');
+  });
+
+  it('returns defensive copies when serving cached issues', () => {
+    const dataDir = tempDataDir();
+    const issue = createIssue({
+      title: 'Cached issue',
+      prompt: 'keep cache immutable',
+      larkAppIds: ['bot_a'],
+      mode: 'lead',
+      column: 'in_progress',
+    }, dataDir);
+
+    const listed = listIssues(dataDir);
+    listed[0].title = 'mutated list';
+    listed[0].larkAppIds.push('bot_b');
+
+    const store = readIssueStore(dataDir);
+    store.issues[0].title = 'mutated store';
+    store.issues[0].larkAppIds.push('bot_c');
+
+    expect(getIssue(issue.id, dataDir)?.title).toBe('Cached issue');
+    expect(getIssue(issue.id, dataDir)?.larkAppIds).toEqual(['bot_a']);
   });
 });

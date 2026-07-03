@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { atomicWriteFileSync } from '../utils/atomic-write.js';
@@ -50,6 +50,15 @@ export type DashboardIssueUpdatePatch = Partial<Pick<
   DashboardIssue,
   'title' | 'prompt' | 'larkAppIds' | 'mode' | 'column' | 'priority' | 'leadLarkAppId' | 'groupName' | 'bindWorkingDir' | 'status'
 >>;
+
+interface IssueStoreCacheEntry {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
+  store: DashboardIssueStoreFile;
+}
+
+const issueStoreCache = new Map<string, IssueStoreCacheEntry>();
 
 function storePath(dataDir: string = config.session.dataDir): string {
   return join(dataDir, 'issues.json');
@@ -156,33 +165,77 @@ function normalizeStore(raw: unknown): DashboardIssueStoreFile {
   };
 }
 
+function cloneIssue(issue: DashboardIssue): DashboardIssue {
+  return {
+    ...issue,
+    larkAppIds: [...issue.larkAppIds],
+    spawned: issue.spawned ? [...issue.spawned] : undefined,
+    failed: issue.failed ? issue.failed.map(row => ({ ...row })) : undefined,
+  };
+}
+
+function cloneStore(store: DashboardIssueStoreFile): DashboardIssueStoreFile {
+  return {
+    version: 1,
+    issues: store.issues.map(cloneIssue),
+  };
+}
+
 export function defaultIssueTitle(prompt: string): string {
   const firstLine = prompt.split(/\r?\n/u).map(s => s.trim()).find(Boolean) ?? 'Untitled issue';
   return firstLine.length <= 80 ? firstLine : `${firstLine.slice(0, 77)}...`;
 }
 
-export function readIssueStore(dataDir: string = config.session.dataDir): DashboardIssueStoreFile {
+function readCachedIssueStore(dataDir: string = config.session.dataDir): DashboardIssueStoreFile {
   const fp = storePath(dataDir);
-  if (!existsSync(fp)) return emptyStore();
+  let st;
   try {
-    return normalizeStore(JSON.parse(readFileSync(fp, 'utf-8')));
+    st = statSync(fp);
   } catch {
+    issueStoreCache.delete(fp);
+    return emptyStore();
+  }
+  const cached = issueStoreCache.get(fp);
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.ctimeMs === st.ctimeMs && cached.size === st.size) {
+    return cached.store;
+  }
+  try {
+    const store = normalizeStore(JSON.parse(readFileSync(fp, 'utf-8')));
+    issueStoreCache.set(fp, { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, store });
+    return store;
+  } catch {
+    issueStoreCache.delete(fp);
     return emptyStore();
   }
 }
 
+export function readIssueStore(dataDir: string = config.session.dataDir): DashboardIssueStoreFile {
+  return cloneStore(readCachedIssueStore(dataDir));
+}
+
 function writeIssueStore(dataDir: string, store: DashboardIssueStoreFile): void {
   const fp = storePath(dataDir);
+  const normalized = normalizeStore(store);
   mkdirSync(dirname(fp), { recursive: true });
-  atomicWriteFileSync(fp, JSON.stringify(normalizeStore(store), null, 2) + '\n', { mode: 0o600 });
+  atomicWriteFileSync(fp, JSON.stringify(normalized, null, 2) + '\n', { mode: 0o600 });
+  try {
+    const st = statSync(fp);
+    issueStoreCache.set(fp, { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, store: normalized });
+  } catch {
+    issueStoreCache.delete(fp);
+  }
 }
 
 export function listIssues(dataDir: string = config.session.dataDir): DashboardIssue[] {
-  return readIssueStore(dataDir).issues.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return readCachedIssueStore(dataDir).issues
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .map(cloneIssue);
 }
 
 export function getIssue(id: string, dataDir: string = config.session.dataDir): DashboardIssue | null {
-  return readIssueStore(dataDir).issues.find(issue => issue.id === id) ?? null;
+  const issue = readCachedIssueStore(dataDir).issues.find(row => row.id === id);
+  return issue ? cloneIssue(issue) : null;
 }
 
 export function createIssue(input: DashboardIssueCreateInput, dataDir: string = config.session.dataDir): DashboardIssue {
@@ -203,10 +256,10 @@ export function createIssue(input: DashboardIssueCreateInput, dataDir: string = 
   if (input.leadLarkAppId && issue.larkAppIds.includes(input.leadLarkAppId)) issue.leadLarkAppId = input.leadLarkAppId;
   if (input.groupName?.trim()) issue.groupName = input.groupName.trim().slice(0, 60);
   if (input.bindWorkingDir?.trim()) issue.bindWorkingDir = input.bindWorkingDir.trim();
-  const store = readIssueStore(dataDir);
+  const store = cloneStore(readCachedIssueStore(dataDir));
   store.issues.push(issue);
   writeIssueStore(dataDir, store);
-  return issue;
+  return cloneIssue(issue);
 }
 
 export function updateIssue(
@@ -214,7 +267,7 @@ export function updateIssue(
   patch: DashboardIssueUpdatePatch,
   dataDir: string = config.session.dataDir,
 ): DashboardIssue | null {
-  const store = readIssueStore(dataDir);
+  const store = cloneStore(readCachedIssueStore(dataDir));
   const idx = store.issues.findIndex(issue => issue.id === id);
   if (idx < 0) return null;
   const current = store.issues[idx];
@@ -264,7 +317,7 @@ export function updateIssue(
   }
   store.issues[idx] = next;
   writeIssueStore(dataDir, store);
-  return next;
+  return cloneIssue(next);
 }
 
 export function recordIssueStart(
@@ -278,7 +331,7 @@ export function recordIssueStart(
   },
   dataDir: string = config.session.dataDir,
 ): DashboardIssue | null {
-  const store = readIssueStore(dataDir);
+  const store = cloneStore(readCachedIssueStore(dataDir));
   const idx = store.issues.findIndex(issue => issue.id === id);
   if (idx < 0) return null;
   const now = new Date().toISOString();
@@ -294,11 +347,11 @@ export function recordIssueStart(
   next.failed = result.failed ?? [];
   store.issues[idx] = next;
   writeIssueStore(dataDir, store);
-  return next;
+  return cloneIssue(next);
 }
 
 export function deleteIssue(id: string, dataDir: string = config.session.dataDir): boolean {
-  const store = readIssueStore(dataDir);
+  const store = cloneStore(readCachedIssueStore(dataDir));
   const before = store.issues.length;
   store.issues = store.issues.filter(issue => issue.id !== id);
   if (store.issues.length === before) return false;
