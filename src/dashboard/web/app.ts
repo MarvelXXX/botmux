@@ -25,7 +25,7 @@ let publicReadOnly = false;
 
 // Management pages are token-gated end-to-end (no public GET) — a read-only
 // visitor must not reach them. `data-route` values from index.html's nav.
-const MANAGE_ROUTES = ['roles', 'role-profiles', 'bot-defaults', 'skills', 'team', 'connectors', 'insights', 'issues', 'whiteboards'];
+const MANAGE_ROUTES = ['roles', 'role-profiles', 'bot-defaults', 'skills', 'team', 'connectors', 'insights', 'task_pool', 'whiteboards'];
 
 // ── Auth-expiry overlay ──────────────────────────────────────────────────────
 // Shown only when the dashboard token was rotated WHILE public read-only is off
@@ -242,6 +242,11 @@ function highlightNav(hash: string): void {
 async function route() {
   const seq = beginDashboardRoute(routeState);
   const hash = location.hash || '#/';
+
+  if (hash === '#/issues' || hash.startsWith('#/issues/')) {
+    window.location.replace(`#/task_pool${hash.slice('#/issues'.length)}`);
+    return;
+  }
 
   // Read-only hard-guard: a tokenless visitor hitting a management route gets a
   // friendly notice instead of a page that fires a 401 (which used to pop a

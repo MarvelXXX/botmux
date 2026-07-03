@@ -30,8 +30,8 @@ export const dashboardRoutes: DashboardRoute[] = [
     },
   },
   {
-    id: 'issues',
-    routePrefix: '#/issues',
+    id: 'task_pool',
+    routePrefix: '#/task_pool',
     rerenderOnUiChange: true,
     load: async () => {
       const mod = await import('./issues-page.js');
