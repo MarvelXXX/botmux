@@ -2107,6 +2107,425 @@ fieldset legend {
   color: var(--warning);
 }
 
+/* ── Issues ───────────────────────────────────────────────────────────────── */
+.issue-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(132px, max-content)) max-content;
+}
+
+.issue-filters input[type=search] {
+  width: 100%;
+  min-width: 0;
+}
+
+.issue-filters select {
+  min-width: 132px;
+}
+
+.issue-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.issue-list.issue-list-grouped {
+  display: block;
+}
+
+.issue-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.issue-column-group {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  align-content: start;
+}
+
+.issue-column-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.issue-column-group h2 {
+  margin: 0;
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.issue-column-group > header span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.issue-column-items {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.issue-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.issue-card > header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 12px;
+  align-items: start;
+}
+
+.issue-card h2 {
+  margin: 7px 0 0;
+  font-size: 16px;
+  line-height: 1.3;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.issue-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.issue-card-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.issue-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.issue-status-draft { background: var(--surface-muted); color: var(--muted); }
+.issue-status-pending { background: var(--warning-soft); color: var(--warning); }
+.issue-status-in_progress { background: var(--accent-soft); color: var(--accent-strong); }
+.issue-status-done { background: var(--success-soft); color: var(--success); }
+.issue-status-archived { background: var(--surface-muted); color: var(--muted); }
+
+.issue-priority {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  margin-left: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.issue-priority-P0 { background: var(--danger-soft); color: var(--danger); }
+.issue-priority-P1 { background: var(--warning-soft); color: var(--warning); }
+.issue-priority-P2 { background: var(--accent-soft); color: var(--accent-strong); }
+.issue-priority-P3 { background: var(--surface-muted); color: var(--muted); }
+
+.issue-card-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.issue-card-controls label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.issue-card-controls label span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.issue-card-controls select {
+  width: 100%;
+  min-width: 0;
+}
+
+.issue-prompt-box {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.issue-prompt-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.issue-prompt-box span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.issue-prompt-box textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.issue-prompt-box textarea:focus {
+  box-shadow: none;
+}
+
+.issue-meta,
+.issue-bots,
+.issue-chat {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.issue-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.issue-meta > span {
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.issue-meta .issue-failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.issue-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--fg);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.issue-chat-link,
+.issue-chat-id {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.issue-group-card {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.issue-group-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.issue-group-card-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.issue-group-card-head code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-group-members,
+.issue-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.issue-group-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.issue-group-card-meta span {
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.issue-group-actions button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.issue-group-management {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.issue-group-management > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.issue-group-management h4 {
+  margin: 0 0 6px;
+  color: var(--fg);
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.issue-group-management p {
+  margin: 4px 0;
+}
+
+.issue-group-management fieldset {
+  margin: 0;
+}
+
+.issue-group-management fieldset > button {
+  margin-top: 8px;
+}
+
+.issue-group-oncall-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.issue-group-oncall-row + .issue-group-oncall-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.issue-group-danger-actions {
+  margin-top: 0;
+}
+
+.issue-group-status:empty {
+  display: none;
+}
+
+.issue-group-edit-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.issue-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.issue-editor {
+  padding: 18px;
+}
+
+.issue-editor h3 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.issue-editor .form-row input[type=text],
+.issue-editor .form-row select,
+.issue-editor .form-row textarea {
+  width: 100%;
+}
+
+.issue-editor .form-row textarea[name=prompt] {
+  min-height: 240px;
+}
+
+.issue-bot-picker {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.issue-bot-row {
+  align-items: flex-start;
+}
+
+.issue-editor-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
 .hint-warn-inline { color: var(--warning); }
 
 .bulk-bar {

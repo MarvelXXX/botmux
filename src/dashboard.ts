@@ -76,6 +76,21 @@ import {
 } from './workflows/ops-projection.js';
 import { createDaemonInternalApi } from './dashboard/daemon-internal-api.js';
 import { listTeamReports, readTeamBoard, setTeamBoardEntry } from './services/team-board-store.js';
+import {
+  createIssue,
+  defaultIssueTitle,
+  deleteIssue,
+  getIssue,
+  listIssues,
+  recordIssueStart,
+  updateIssue,
+  type DashboardIssueColumn,
+  type DashboardIssueCreateInput,
+  type DashboardIssueMode,
+  type DashboardIssuePriority,
+  type DashboardIssueStatus,
+  type DashboardIssueUpdatePatch,
+} from './services/issue-store.js';
 import type { CliId } from './adapters/cli/types.js';
 import type { ConnectorDefinition } from './services/connector-store.js';
 import { hd2dAssetPath, hd2dStatus, startHd2dDownload } from './dashboard/hd2d-assets.js';
@@ -586,6 +601,227 @@ function liveBots(): { larkAppId: string; botName: string; cliId?: string }[] {
     const b = withConfiguredCliId(d, ids);
     return { larkAppId: b.larkAppId, botName: b.botName, cliId: b.cliId };
   });
+}
+
+interface DashboardSessionCreateRequest {
+  content?: unknown;
+  larkAppIds?: unknown;
+  mode?: unknown;
+  column?: unknown;
+  leadLarkAppId?: unknown;
+  name?: unknown;
+  bindWorkingDir?: unknown;
+}
+
+async function createDashboardSession(parsed: DashboardSessionCreateRequest): Promise<{
+  status: number;
+  body: Record<string, unknown>;
+}> {
+  const content = typeof parsed.content === 'string' ? parsed.content.replace(/\s+$/u, '') : '';
+  if (!content.trim()) return { status: 400, body: { ok: false, error: 'empty_content' } };
+  const selectedIds = Array.isArray(parsed.larkAppIds)
+    ? Array.from(new Set((parsed.larkAppIds as unknown[]).filter((x): x is string => typeof x === 'string')))
+    : [];
+  if (selectedIds.length === 0) return { status: 400, body: { ok: false, error: 'larkAppIds_required' } };
+  const mode = parsed.mode === 'lead' ? 'lead' : parsed.mode === 'all' ? 'all' : null;
+  if (!mode) return { status: 400, body: { ok: false, error: 'bad_mode' } };
+  const column = parsed.column === 'backlog' ? 'backlog' : parsed.column === 'in_progress' ? 'in_progress' : null;
+  if (!column) return { status: 400, body: { ok: false, error: 'bad_column' } };
+  const bindWorkingDir = typeof parsed.bindWorkingDir === 'string' && parsed.bindWorkingDir.trim()
+    ? parsed.bindWorkingDir.trim() : undefined;
+  const name = typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim().slice(0, 60) : undefined;
+
+  let creatorLarkAppId: string;
+  if (mode === 'lead') {
+    const leadLarkAppId = typeof parsed.leadLarkAppId === 'string' ? parsed.leadLarkAppId : '';
+    if (!leadLarkAppId || !selectedIds.includes(leadLarkAppId)) {
+      return { status: 400, body: { ok: false, error: 'bad_lead' } };
+    }
+    if (!registry.getByAppId(leadLarkAppId)) return { status: 503, body: { ok: false, error: 'lead_offline' } };
+    creatorLarkAppId = leadLarkAppId;
+  } else {
+    const pick = pickCreatorForGroup(selectedIds, (id) => {
+      const d = registry.getByAppId(id);
+      return d ? { larkAppId: d.larkAppId, resolvedAllowedUsers: d.resolvedAllowedUsers ?? [] } : undefined;
+    });
+    if (!pick) return { status: 503, body: { ok: false, error: 'no_online_daemon' } };
+    creatorLarkAppId = pick.creatorLarkAppId;
+  }
+
+  const creatorDesc = registry.getByAppId(creatorLarkAppId)!;
+  const allowed = creatorDesc.resolvedAllowedUsers ?? [];
+  const userOpenId = allowed.find(u => u.startsWith('ou_'));
+  const ownerUnionIds = allowed.filter(u => u.startsWith('on_'));
+
+  let groupResp: any = null;
+  try {
+    const groupUpstream = await proxyToDaemon(creatorLarkAppId, '/api/groups/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        larkAppIds: selectedIds,
+        userOpenIds: userOpenId ? [userOpenId] : [],
+        ownerUnionIds,
+        transferOwnerTo: userOpenId,
+        notifyOwnerOpenId: userOpenId,
+        bindWorkingDir,
+      }),
+    });
+    groupResp = await groupUpstream.json().catch(() => null);
+    if (!groupUpstream.ok || !groupResp?.ok || typeof groupResp.chatId !== 'string') {
+      return {
+        status: 502,
+        body: { ok: false, error: groupResp?.error ?? `group_create_http_${groupUpstream.status}` },
+      };
+    }
+  } catch {
+    return { status: 502, body: { ok: false, error: 'group_create_proxy_failed' } };
+  }
+  const chatId: string = groupResp.chatId;
+  const invalidBotIds: string[] = Array.isArray(groupResp.invalidBotIds) ? groupResp.invalidBotIds : [];
+
+  const joinedIds = selectedIds.filter(id => !invalidBotIds.includes(id) && !!registry.getByAppId(id));
+  const targets = mode === 'lead'
+    ? (joinedIds.includes(creatorLarkAppId) ? [creatorLarkAppId] : [])
+    : joinedIds;
+  if (targets.length === 0) {
+    return {
+      status: 200,
+      body: { ok: true, chatId, shareLink: groupResp.shareLink, spawned: [], failed: [], warning: 'no_spawn_target' },
+    };
+  }
+
+  const bots = liveBots();
+  const nameOf = (id: string) => bots.find(b => b.larkAppId === id)?.botName ?? id;
+  const spawned: string[] = [];
+  const failed: Array<{ larkAppId: string; error: string }> = [];
+  await Promise.all(targets.map(async (appId) => {
+    const role = mode === 'lead' ? 'lead' : (targets.length > 1 ? 'collab' : 'solo');
+    const coworkerIds = (mode === 'lead' ? selectedIds : targets).filter(id => id !== appId);
+    const coworkers = coworkerIds.map(id => ({ name: nameOf(id) }));
+    try {
+      const up = await proxyToDaemon(appId, '/api/sessions/spawn', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          chatId, content, column, role, coworkers,
+          postBanner: appId === creatorLarkAppId,
+        }),
+      });
+      const b = await up.json().catch(() => null);
+      if (up.ok && b?.ok) spawned.push(appId);
+      else failed.push({ larkAppId: appId, error: b?.error ?? `http_${up.status}` });
+    } catch (e: any) {
+      failed.push({ larkAppId: appId, error: e?.message ?? String(e) });
+    }
+  }));
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      chatId,
+      shareLink: groupResp.shareLink,
+      mode,
+      column,
+      spawned,
+      failed,
+    },
+  };
+}
+
+function parseIssueMode(value: unknown): DashboardIssueMode {
+  return value === 'all' ? 'all' : 'lead';
+}
+
+function parseIssueColumn(value: unknown): DashboardIssueColumn {
+  return value === 'backlog' ? 'backlog' : 'in_progress';
+}
+
+function parseIssuePriority(value: unknown): DashboardIssuePriority {
+  return value === 'P0' || value === 'P1' || value === 'P2' || value === 'P3' ? value : 'P2';
+}
+
+function parseIssueStatus(value: unknown): DashboardIssueStatus | null {
+  return (
+    value === 'draft' ||
+    value === 'pending' ||
+    value === 'in_progress' ||
+    value === 'done' ||
+    value === 'archived'
+  ) ? value : null;
+}
+
+function parseIssueCreateBody(raw: unknown): { ok: true; input: DashboardIssueCreateInput } | { ok: false; error: string } {
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+  if (!prompt) return { ok: false, error: 'prompt_required' };
+  const larkAppIds = Array.isArray(body.larkAppIds)
+    ? Array.from(new Set(body.larkAppIds.filter((x): x is string => typeof x === 'string').map(x => x.trim()).filter(Boolean)))
+    : [];
+  if (larkAppIds.length === 0) return { ok: false, error: 'larkAppIds_required' };
+  const mode = parseIssueMode(body.mode);
+  const leadLarkAppId = typeof body.leadLarkAppId === 'string' ? body.leadLarkAppId.trim() : '';
+  if (mode === 'lead' && (!leadLarkAppId || !larkAppIds.includes(leadLarkAppId))) {
+    return { ok: false, error: 'bad_lead' };
+  }
+  const title = typeof body.title === 'string' && body.title.trim()
+    ? body.title.trim().slice(0, 120)
+    : defaultIssueTitle(prompt);
+  return {
+    ok: true,
+    input: {
+      title,
+      prompt,
+      larkAppIds,
+      mode,
+      column: parseIssueColumn(body.column),
+      priority: parseIssuePriority(body.priority),
+      leadLarkAppId: mode === 'lead' ? leadLarkAppId : undefined,
+      groupName: typeof body.groupName === 'string' ? body.groupName.trim() : undefined,
+      bindWorkingDir: typeof body.bindWorkingDir === 'string' ? body.bindWorkingDir.trim() : undefined,
+    },
+  };
+}
+
+function parseIssueUpdateBody(raw: unknown): { ok: true; patch: DashboardIssueUpdatePatch } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'bad_json' };
+  const body = raw as Record<string, unknown>;
+  const patch: DashboardIssueUpdatePatch = {};
+  if ('title' in body && typeof body.title === 'string') patch.title = body.title;
+  if ('prompt' in body) {
+    if (typeof body.prompt !== 'string' || !body.prompt.trim()) return { ok: false, error: 'prompt_required' };
+    patch.prompt = body.prompt;
+  }
+  if ('larkAppIds' in body) {
+    if (!Array.isArray(body.larkAppIds)) return { ok: false, error: 'larkAppIds_required' };
+    patch.larkAppIds = Array.from(new Set(body.larkAppIds.filter((x): x is string => typeof x === 'string').map(x => x.trim()).filter(Boolean)));
+    if (patch.larkAppIds.length === 0) return { ok: false, error: 'larkAppIds_required' };
+  }
+  if ('mode' in body) {
+    if (body.mode !== 'lead' && body.mode !== 'all') return { ok: false, error: 'bad_mode' };
+    patch.mode = body.mode;
+  }
+  if ('column' in body) {
+    if (body.column !== 'in_progress' && body.column !== 'backlog') return { ok: false, error: 'bad_column' };
+    patch.column = body.column;
+  }
+  if ('priority' in body) {
+    if (body.priority !== 'P0' && body.priority !== 'P1' && body.priority !== 'P2' && body.priority !== 'P3') {
+      return { ok: false, error: 'bad_priority' };
+    }
+    patch.priority = body.priority;
+  }
+  if ('leadLarkAppId' in body && typeof body.leadLarkAppId === 'string') patch.leadLarkAppId = body.leadLarkAppId;
+  if ('groupName' in body && typeof body.groupName === 'string') patch.groupName = body.groupName;
+  if ('bindWorkingDir' in body && typeof body.bindWorkingDir === 'string') patch.bindWorkingDir = body.bindWorkingDir;
+  if ('status' in body) {
+    const status = parseIssueStatus(body.status);
+    if (!status) return { ok: false, error: 'bad_status' };
+    patch.status = status;
+  }
+  return { ok: true, patch };
 }
 
 async function createTeamGroup(args: { name: string; larkAppIds: string[]; userOpenId?: string; preferredCreator?: string; ownerUnionIds?: string[]; roleProfileId?: string }): Promise<{
@@ -2410,122 +2646,97 @@ const server = createServer(async (req, res) => {
     // 一条 chat-scope 会话。一起开工=每个被选 bot 各起一条；lead 分配=只起 lead，由它
     // 在群里 @ 拉起 sub bot。in_progress=立即开跑；backlog=入待办池（parked，等激活）。
     if (req.method === 'POST' && url.pathname === '/api/sessions/create') {
-      let parsed: {
-        content?: unknown; larkAppIds?: unknown; mode?: unknown; column?: unknown;
-        leadLarkAppId?: unknown; name?: unknown; bindWorkingDir?: unknown;
-      };
+      let parsed: DashboardSessionCreateRequest;
       try {
-        const chunks: Buffer[] = [];
-        for await (const c of req) chunks.push(c as Buffer);
-        parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+        parsed = await readJsonBody(req) as DashboardSessionCreateRequest;
       } catch {
         return jsonRes(res, 400, { ok: false, error: 'bad_json' });
       }
-      const content = typeof parsed.content === 'string' ? parsed.content.replace(/\s+$/u, '') : '';
-      if (!content.trim()) return jsonRes(res, 400, { ok: false, error: 'empty_content' });
-      const selectedIds = Array.isArray(parsed.larkAppIds)
-        ? Array.from(new Set((parsed.larkAppIds as unknown[]).filter((x): x is string => typeof x === 'string')))
-        : [];
-      if (selectedIds.length === 0) return jsonRes(res, 400, { ok: false, error: 'larkAppIds_required' });
-      const mode = parsed.mode === 'lead' ? 'lead' : parsed.mode === 'all' ? 'all' : null;
-      if (!mode) return jsonRes(res, 400, { ok: false, error: 'bad_mode' });
-      const column = parsed.column === 'backlog' ? 'backlog' : parsed.column === 'in_progress' ? 'in_progress' : null;
-      if (!column) return jsonRes(res, 400, { ok: false, error: 'bad_column' });
-      const bindWorkingDir = typeof parsed.bindWorkingDir === 'string' && parsed.bindWorkingDir.trim()
-        ? parsed.bindWorkingDir.trim() : undefined;
-      const name = typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim().slice(0, 60) : undefined;
+      const result = await createDashboardSession(parsed);
+      return jsonRes(res, result.status, result.body);
+    }
 
-      // 解析 creator：lead 模式 = lead bot；一起开工 = pickCreatorForGroup 在选中里挑一个在线的。
-      let creatorLarkAppId: string;
-      if (mode === 'lead') {
-        const leadLarkAppId = typeof parsed.leadLarkAppId === 'string' ? parsed.leadLarkAppId : '';
-        if (!leadLarkAppId || !selectedIds.includes(leadLarkAppId)) {
-          return jsonRes(res, 400, { ok: false, error: 'bad_lead' });
-        }
-        if (!registry.getByAppId(leadLarkAppId)) return jsonRes(res, 503, { ok: false, error: 'lead_offline' });
-        creatorLarkAppId = leadLarkAppId;
-      } else {
-        const pick = pickCreatorForGroup(selectedIds, (id) => {
-          const d = registry.getByAppId(id);
-          return d ? { larkAppId: d.larkAppId, resolvedAllowedUsers: d.resolvedAllowedUsers ?? [] } : undefined;
-        });
-        if (!pick) return jsonRes(res, 503, { ok: false, error: 'no_online_daemon' });
-        creatorLarkAppId = pick.creatorLarkAppId;
-      }
+    if (req.method === 'GET' && url.pathname === '/api/issues') {
+      return jsonRes(res, 200, { issues: listIssues() });
+    }
 
-      // creator 作用域里的操作者 open_id（首个 ou_ allowedUser）——用于邀请进群 + 转群主 + @通知。
-      // 同时取 on_（union_id，租户内跨 app 稳定）做兜底邀请：lead 模式强制 creator=lead，
-      // 万一 lead 的 allowlist 没有 ou_ 条目，open_id 解析不到、操作者就进不了群——union_id
-      // 不受 app 作用域影响，仍能把人拉进来（createGroupWithBots 走 ownerUnionIds 通道）。
-      const creatorDesc = registry.getByAppId(creatorLarkAppId)!;
-      const allowed = creatorDesc.resolvedAllowedUsers ?? [];
-      const userOpenId = allowed.find(u => u.startsWith('ou_'));
-      const ownerUnionIds = allowed.filter(u => u.startsWith('on_'));
-
-      // 建群（拉所有选中 bot + 邀请操作者 + 转群主 + @通知 + 可选绑 oncall 工作目录）。
-      let groupResp: any = null;
+    if (req.method === 'POST' && url.pathname === '/api/issues') {
+      let parsed: unknown;
       try {
-        const groupUpstream = await proxyToDaemon(creatorLarkAppId, '/api/groups/create', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            name,
-            larkAppIds: selectedIds,
-            userOpenIds: userOpenId ? [userOpenId] : [],
-            ownerUnionIds,
-            transferOwnerTo: userOpenId,
-            notifyOwnerOpenId: userOpenId,
-            bindWorkingDir,
-          }),
-        });
-        groupResp = await groupUpstream.json().catch(() => null);
-        if (!groupUpstream.ok || !groupResp?.ok || typeof groupResp.chatId !== 'string') {
-          return jsonRes(res, 502, { ok: false, error: groupResp?.error ?? `group_create_http_${groupUpstream.status}` });
-        }
+        parsed = await readJsonBody(req);
       } catch {
-        return jsonRes(res, 502, { ok: false, error: 'group_create_proxy_failed' });
+        return jsonRes(res, 400, { ok: false, error: 'bad_json' });
       }
-      const chatId: string = groupResp.chatId;
-      const invalidBotIds: string[] = Array.isArray(groupResp.invalidBotIds) ? groupResp.invalidBotIds : [];
+      const input = parseIssueCreateBody(parsed);
+      if (!input.ok) return jsonRes(res, 400, { ok: false, error: input.error });
+      const issue = createIssue(input.input);
+      return jsonRes(res, 201, { ok: true, issue });
+    }
 
-      // spawn 目标：lead 模式只有 lead；一起开工是所有成功入群的选中 bot。
-      const joinedIds = selectedIds.filter(id => !invalidBotIds.includes(id) && !!registry.getByAppId(id));
-      const targets = mode === 'lead'
-        ? (joinedIds.includes(creatorLarkAppId) ? [creatorLarkAppId] : [])
-        : joinedIds;
-      if (targets.length === 0) {
-        return jsonRes(res, 200, { ok: true, chatId, shareLink: groupResp.shareLink, spawned: [], failed: [], warning: 'no_spawn_target' });
+    let mIssue: RegExpMatchArray | null;
+    if ((mIssue = url.pathname.match(/^\/api\/issues\/([^/]+)$/))) {
+      const issueId = decodeURIComponent(mIssue[1]);
+      if (req.method === 'GET') {
+        const issue = getIssue(issueId);
+        if (!issue) return jsonRes(res, 404, { ok: false, error: 'issue_not_found' });
+        return jsonRes(res, 200, { ok: true, issue });
       }
-
-      const bots = liveBots();
-      const nameOf = (id: string) => bots.find(b => b.larkAppId === id)?.botName ?? id;
-      const spawned: string[] = [];
-      const failed: Array<{ larkAppId: string; error: string }> = [];
-      await Promise.all(targets.map(async (appId) => {
-        const role = mode === 'lead' ? 'lead' : (targets.length > 1 ? 'collab' : 'solo');
-        // lead 的 coworker = 所有 sub（除自己）；collab 的 coworker = 其它并列 bot（除自己）。
-        const coworkerIds = (mode === 'lead' ? selectedIds : targets).filter(id => id !== appId);
-        const coworkers = coworkerIds.map(id => ({ name: nameOf(id) }));
+      if (req.method === 'PUT') {
+        let parsed: unknown;
         try {
-          const up = await proxyToDaemon(appId, '/api/sessions/spawn', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              chatId, content, column, role, coworkers,
-              postBanner: appId === creatorLarkAppId,
-            }),
-          });
-          const b = await up.json().catch(() => null);
-          if (up.ok && b?.ok) spawned.push(appId);
-          else failed.push({ larkAppId: appId, error: b?.error ?? `http_${up.status}` });
-        } catch (e: any) {
-          failed.push({ larkAppId: appId, error: e?.message ?? String(e) });
+          parsed = await readJsonBody(req);
+        } catch {
+          return jsonRes(res, 400, { ok: false, error: 'bad_json' });
         }
-      }));
+        const patch = parseIssueUpdateBody(parsed);
+        if (!patch.ok) return jsonRes(res, 400, { ok: false, error: patch.error });
+        const issue = updateIssue(issueId, patch.patch);
+        if (!issue) return jsonRes(res, 404, { ok: false, error: 'issue_not_found' });
+        return jsonRes(res, 200, { ok: true, issue });
+      }
+      if (req.method === 'DELETE') {
+        const deleted = deleteIssue(issueId);
+        if (!deleted) return jsonRes(res, 404, { ok: false, error: 'issue_not_found' });
+        return jsonRes(res, 200, { ok: true });
+      }
+    }
 
-      return jsonRes(res, 200, {
-        ok: true, chatId, shareLink: groupResp.shareLink, mode, column, spawned, failed,
+    if (req.method === 'POST' && (mIssue = url.pathname.match(/^\/api\/issues\/([^/]+)\/start$/))) {
+      const issueId = decodeURIComponent(mIssue[1]);
+      const issue = getIssue(issueId);
+      if (!issue) return jsonRes(res, 404, { ok: false, error: 'issue_not_found' });
+      if (issue.status === 'in_progress' && issue.chatId) {
+        return jsonRes(res, 409, { ok: false, error: 'issue_already_started', issue });
+      }
+      const result = await createDashboardSession({
+        content: issue.prompt,
+        larkAppIds: issue.larkAppIds,
+        mode: issue.mode,
+        column: issue.column,
+        leadLarkAppId: issue.leadLarkAppId,
+        name: issue.groupName || issue.title,
+        bindWorkingDir: issue.bindWorkingDir,
       });
+      const body = result.body as {
+        ok?: unknown;
+        error?: unknown;
+        chatId?: unknown;
+        shareLink?: unknown;
+        spawned?: unknown;
+        failed?: unknown;
+      };
+      const started = body.ok === true;
+      const updated = recordIssueStart(issueId, {
+        status: started ? 'in_progress' : 'pending',
+        chatId: typeof body.chatId === 'string' ? body.chatId : undefined,
+        shareLink: typeof body.shareLink === 'string' ? body.shareLink : undefined,
+        spawned: Array.isArray(body.spawned) ? body.spawned.filter((x): x is string => typeof x === 'string') : [],
+        failed: Array.isArray(body.failed)
+          ? body.failed.filter((x): x is { larkAppId: string; error: string } =>
+            !!x && typeof x === 'object' && typeof x.larkAppId === 'string' && typeof x.error === 'string')
+          : (started ? [] : [{ larkAppId: 'dashboard', error: String(body.error ?? 'start_failed') }]),
+      });
+      return jsonRes(res, result.status, { ...result.body, issue: updated ?? issue });
     }
 
     // Public SSE — relays aggregator's listener events

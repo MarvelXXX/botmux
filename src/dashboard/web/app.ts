@@ -25,7 +25,7 @@ let publicReadOnly = false;
 
 // Management pages are token-gated end-to-end (no public GET) — a read-only
 // visitor must not reach them. `data-route` values from index.html's nav.
-const MANAGE_ROUTES = ['roles', 'role-profiles', 'bot-defaults', 'skills', 'team', 'connectors', 'insights', 'whiteboards'];
+const MANAGE_ROUTES = ['roles', 'role-profiles', 'bot-defaults', 'skills', 'team', 'connectors', 'insights', 'issues', 'whiteboards'];
 
 // ── Auth-expiry overlay ──────────────────────────────────────────────────────
 // Shown only when the dashboard token was rotated WHILE public read-only is off

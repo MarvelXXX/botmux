@@ -30,6 +30,15 @@ export const dashboardRoutes: DashboardRoute[] = [
     },
   },
   {
+    id: 'issues',
+    routePrefix: '#/issues',
+    rerenderOnUiChange: true,
+    load: async () => {
+      const mod = await import('./issues-page.js');
+      return root => mod.renderIssuesPage(root);
+    },
+  },
+  {
     id: 'groups',
     routePrefix: '#/groups',
     // Groups is currently a render-once React scaffold around the existing
