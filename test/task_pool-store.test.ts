@@ -9,12 +9,12 @@ import {
   readIssueStore,
   recordIssueStart,
   updateIssue,
-} from '../src/services/issue-store.js';
+} from '../src/services/task_pool-store.js';
 
 let dirs: string[] = [];
 
 function tempDataDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'botmux-issue-store-'));
+  const dir = mkdtempSync(join(tmpdir(), 'botmux-task_pool-store-'));
   dirs.push(dir);
   return dir;
 }
@@ -24,7 +24,7 @@ afterEach(() => {
   dirs = [];
 });
 
-describe('issue-store', () => {
+describe('task_pool-store', () => {
   it('creates, updates, and records start results', () => {
     const dataDir = tempDataDir();
     const issue = createIssue({

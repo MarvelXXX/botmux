@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { mountReactPage, type PageDisposer } from './react-mount.js';
 import { useT } from './react-hooks.js';
-import { wireIssuesPage } from './issues.js';
+import { wireIssuesPage } from './task_pool.js';
 
 function IssuesPage() {
   const tr = useT();

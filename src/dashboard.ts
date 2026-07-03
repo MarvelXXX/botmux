@@ -90,7 +90,7 @@ import {
   type DashboardIssuePriority,
   type DashboardIssueStatus,
   type DashboardIssueUpdatePatch,
-} from './services/issue-store.js';
+} from './services/task_pool-store.js';
 import type { CliId } from './adapters/cli/types.js';
 import type { ConnectorDefinition } from './services/connector-store.js';
 import { hd2dAssetPath, hd2dStatus, startHd2dDownload } from './dashboard/hd2d-assets.js';
