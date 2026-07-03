@@ -1,28 +1,28 @@
 import { escapeHtml, relTime, t } from './ui.js';
 import { renderAddBotsResultSummary, renderBotCheckboxes } from './groups.js';
 
-type IssueStatus = 'draft' | 'pending' | 'in_progress' | 'done' | 'archived';
-type IssuePriority = 'P0' | 'P1' | 'P2' | 'P3';
-type IssueMode = 'lead' | 'all';
-type IssueColumn = 'in_progress' | 'backlog';
-type IssueGroupBy = 'status' | 'priority';
-type IssuePatch = Partial<Pick<DashboardIssue, 'status' | 'priority' | 'prompt' | 'larkAppIds' | 'groupName'>>;
+type TaskPoolStatus = 'draft' | 'pending' | 'in_progress' | 'done' | 'archived';
+type TaskPoolPriority = 'P0' | 'P1' | 'P2' | 'P3';
+type TaskPoolMode = 'lead' | 'all';
+type TaskPoolColumn = 'in_progress' | 'backlog';
+type TaskPoolGroupBy = 'status' | 'priority';
+type TaskPoolPatch = Partial<Pick<DashboardTaskPool, 'status' | 'priority' | 'prompt' | 'larkAppIds' | 'groupName'>>;
 
-const ISSUE_STATUSES: IssueStatus[] = ['draft', 'pending', 'in_progress', 'done', 'archived'];
-const ISSUE_PRIORITIES: IssuePriority[] = ['P0', 'P1', 'P2', 'P3'];
+const TASK_POOL_STATUSES: TaskPoolStatus[] = ['draft', 'pending', 'in_progress', 'done', 'archived'];
+const TASK_POOL_PRIORITIES: TaskPoolPriority[] = ['P0', 'P1', 'P2', 'P3'];
 
-interface DashboardIssue {
+interface DashboardTaskPool {
   id: string;
   title: string;
   prompt: string;
   larkAppIds: string[];
-  mode: IssueMode;
-  column: IssueColumn;
+  mode: TaskPoolMode;
+  column: TaskPoolColumn;
   leadLarkAppId?: string;
   groupName?: string;
   bindWorkingDir?: string;
-  status: IssueStatus;
-  priority: IssuePriority;
+  status: TaskPoolStatus;
+  priority: TaskPoolPriority;
   chatId?: string;
   shareLink?: string;
   spawned?: string[];
@@ -38,7 +38,7 @@ interface PickerBot {
   botName: string;
 }
 
-interface IssueGroupBot {
+interface TaskPoolGroupBot {
   larkAppId: string;
   botName?: string;
   inChat?: boolean;
@@ -46,35 +46,35 @@ interface IssueGroupBot {
   oncallChat?: { workingDir?: string } | null;
 }
 
-interface IssueGroupChat {
+interface TaskPoolGroupChat {
   chatId: string;
   name?: string;
   ownerId?: string | null;
-  memberBots?: IssueGroupBot[];
+  memberBots?: TaskPoolGroupBot[];
 }
 
-let issues: DashboardIssue[] = [];
+let taskPools: DashboardTaskPool[] = [];
 let bots: PickerBot[] = [];
-let groupChats: IssueGroupChat[] = [];
+let groupChats: TaskPoolGroupChat[] = [];
 
 function statusLabel(status: string): string {
-  const key = `issues.status.${status}`;
+  const key = `task_pool.status.${status}`;
   const label = t(key);
   return label === key ? status : label;
 }
 
 function priorityLabel(priority: string): string {
-  const key = `issues.priority.${priority}`;
+  const key = `task_pool.priority.${priority}`;
   const label = t(key);
   return label === key ? priority : label;
 }
 
-function columnLabel(column: IssueColumn): string {
-  return column === 'backlog' ? t('issues.column.backlog') : t('issues.column.inProgress');
+function columnLabel(column: TaskPoolColumn): string {
+  return column === 'backlog' ? t('task_pool.column.backlog') : t('task_pool.column.inProgress');
 }
 
-function modeLabel(mode: IssueMode): string {
-  return mode === 'all' ? t('issues.mode.all') : t('issues.mode.lead');
+function modeLabel(mode: TaskPoolMode): string {
+  return mode === 'all' ? t('task_pool.mode.all') : t('task_pool.mode.lead');
 }
 
 function botName(id: string): string {
@@ -91,18 +91,18 @@ function optionHtml(value: string, label: string, selected: boolean): string {
   return `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
 }
 
-function statusOptions(current: IssueStatus): string {
-  return ISSUE_STATUSES.map(status => optionHtml(status, statusLabel(status), status === current)).join('');
+function statusOptions(current: TaskPoolStatus): string {
+  return TASK_POOL_STATUSES.map(status => optionHtml(status, statusLabel(status), status === current)).join('');
 }
 
-function priorityOptions(current: IssuePriority): string {
-  return ISSUE_PRIORITIES.map(priority => optionHtml(priority, priorityLabel(priority), priority === current)).join('');
+function priorityOptions(current: TaskPoolPriority): string {
+  return TASK_POOL_PRIORITIES.map(priority => optionHtml(priority, priorityLabel(priority), priority === current)).join('');
 }
 
-async function loadIssues(): Promise<void> {
-  const r = await fetch('/api/issues');
+async function loadTaskPools(): Promise<void> {
+  const r = await fetch('/api/task_pool');
   const body = await r.json().catch(() => ({}));
-  issues = Array.isArray(body?.issues) ? body.issues : [];
+  taskPools = Array.isArray(body?.taskPools) ? body.taskPools : [];
 }
 
 async function loadBots(): Promise<void> {
@@ -124,18 +124,18 @@ async function loadBots(): Promise<void> {
   }
 }
 
-function groupChatFromMatrix(issue: DashboardIssue): IssueGroupChat | null {
-  return issue.chatId ? groupChats.find(chat => chat.chatId === issue.chatId) ?? null : null;
+function groupChatFromMatrix(taskPool: DashboardTaskPool): TaskPoolGroupChat | null {
+  return taskPool.chatId ? groupChats.find(chat => chat.chatId === taskPool.chatId) ?? null : null;
 }
 
-function groupChatForIssue(issue: DashboardIssue): IssueGroupChat | null {
-  if (!issue.chatId) return null;
-  const found = groupChatFromMatrix(issue);
+function groupChatForTaskPool(taskPool: DashboardTaskPool): TaskPoolGroupChat | null {
+  if (!taskPool.chatId) return null;
+  const found = groupChatFromMatrix(taskPool);
   if (found) return found;
-  const expected = new Set([...(issue.spawned ?? []), ...issue.larkAppIds]);
+  const expected = new Set([...(taskPool.spawned ?? []), ...taskPool.larkAppIds]);
   return {
-    chatId: issue.chatId,
-    name: issue.groupName || issue.title || issue.chatId,
+    chatId: taskPool.chatId,
+    name: taskPool.groupName || taskPool.title || taskPool.chatId,
     ownerId: null,
     memberBots: bots.map(bot => ({
       ...bot,
@@ -145,106 +145,106 @@ function groupChatForIssue(issue: DashboardIssue): IssueGroupChat | null {
   };
 }
 
-function groupOpenUrl(issue: DashboardIssue): string | null {
-  if (issue.shareLink) return issue.shareLink;
-  return issue.chatId ? `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(issue.chatId)}` : null;
+function groupOpenUrl(taskPool: DashboardTaskPool): string | null {
+  if (taskPool.shareLink) return taskPool.shareLink;
+  return taskPool.chatId ? `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(taskPool.chatId)}` : null;
 }
 
-function groupDisplayName(issue: DashboardIssue, chat: IssueGroupChat | null): string {
-  return chat?.name || issue.groupName || issue.title || issue.chatId || '';
+function groupDisplayName(taskPool: DashboardTaskPool, chat: TaskPoolGroupChat | null): string {
+  return chat?.name || taskPool.groupName || taskPool.title || taskPool.chatId || '';
 }
 
-function inChatBots(chat: IssueGroupChat | null): IssueGroupBot[] {
+function inChatBots(chat: TaskPoolGroupChat | null): TaskPoolGroupBot[] {
   return (chat?.memberBots ?? []).filter(bot => bot?.inChat);
 }
 
-function associatedBotIds(issue: DashboardIssue): string[] {
-  if (!issue.chatId) return issue.larkAppIds;
-  const ids = inChatBots(groupChatForIssue(issue)).map(bot => bot.larkAppId);
-  return ids.length ? ids : issue.larkAppIds;
+function associatedBotIds(taskPool: DashboardTaskPool): string[] {
+  if (!taskPool.chatId) return taskPool.larkAppIds;
+  const ids = inChatBots(groupChatForTaskPool(taskPool)).map(bot => bot.larkAppId);
+  return ids.length ? ids : taskPool.larkAppIds;
 }
 
-function groupTruthBotIds(issue: DashboardIssue): string[] {
-  return inChatBots(groupChatFromMatrix(issue)).map(bot => bot.larkAppId);
+function groupTruthBotIds(taskPool: DashboardTaskPool): string[] {
+  return inChatBots(groupChatFromMatrix(taskPool)).map(bot => bot.larkAppId);
 }
 
 function arraysEqual(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function groupOncallCount(chat: IssueGroupChat | null): number {
+function groupOncallCount(chat: TaskPoolGroupChat | null): number {
   return inChatBots(chat).filter(bot => !!bot.oncallChat).length;
 }
 
 function botChips(ids: string[]): string {
-  return ids.map(id => `<span class="issue-chip">${escapeHtml(botName(id))}</span>`).join('');
+  return ids.map(id => `<span class="task_pool-chip">${escapeHtml(botName(id))}</span>`).join('');
 }
 
-function issueGroupCard(issue: DashboardIssue): string {
-  const chat = groupChatForIssue(issue);
-  if (!issue.chatId || !chat) return '';
-  const synced = !!groupChatFromMatrix(issue);
+function taskPoolGroupCard(taskPool: DashboardTaskPool): string {
+  const chat = groupChatForTaskPool(taskPool);
+  if (!taskPool.chatId || !chat) return '';
+  const synced = !!groupChatFromMatrix(taskPool);
   const members = inChatBots(chat);
-  const openUrl = groupOpenUrl(issue);
-  const memberChips = members.slice(0, 4).map(bot => `<span class="issue-chip">${escapeHtml(bot.botName ?? bot.larkAppId)}</span>`).join('');
-  const more = members.length > 4 ? `<span class="issue-chip">+${escapeHtml(String(members.length - 4))}</span>` : '';
-  return `<section class="issue-group-card">
-    <div class="issue-group-card-head">
-      <span>${escapeHtml(t('issues.group.title'))}</span>
-      <code>${escapeHtml(groupDisplayName(issue, chat))}</code>
+  const openUrl = groupOpenUrl(taskPool);
+  const memberChips = members.slice(0, 4).map(bot => `<span class="task_pool-chip">${escapeHtml(bot.botName ?? bot.larkAppId)}</span>`).join('');
+  const more = members.length > 4 ? `<span class="task_pool-chip">+${escapeHtml(String(members.length - 4))}</span>` : '';
+  return `<section class="task_pool-group-card">
+    <div class="task_pool-group-card-head">
+      <span>${escapeHtml(t('task_pool.group.title'))}</span>
+      <code>${escapeHtml(groupDisplayName(taskPool, chat))}</code>
     </div>
-    <div class="issue-group-members">
-      ${memberChips || `<span class="muted">${escapeHtml(t('issues.group.notSynced'))}</span>`}
+    <div class="task_pool-group-members">
+      ${memberChips || `<span class="muted">${escapeHtml(t('task_pool.group.notSynced'))}</span>`}
       ${more}
     </div>
-    <div class="issue-group-card-meta">
-      <span>${escapeHtml(t('issues.group.memberCount', { count: members.length }))}</span>
-      <span>${escapeHtml(t('issues.group.oncallCount', { count: groupOncallCount(chat) }))}</span>
-      <span>${escapeHtml(t(synced ? 'issues.group.linked' : 'issues.group.syncPending'))}</span>
+    <div class="task_pool-group-card-meta">
+      <span>${escapeHtml(t('task_pool.group.memberCount', { count: members.length }))}</span>
+      <span>${escapeHtml(t('task_pool.group.oncallCount', { count: groupOncallCount(chat) }))}</span>
+      <span>${escapeHtml(t(synced ? 'task_pool.group.linked' : 'task_pool.group.syncPending'))}</span>
     </div>
-    <div class="issue-group-actions">
-      ${openUrl ? `<a class="issue-chat-link" href="${escapeHtml(openUrl)}" target="_blank" rel="noopener">${escapeHtml(t('issues.openChat'))}</a>` : ''}
+    <div class="task_pool-group-actions">
+      ${openUrl ? `<a class="task_pool-chat-link" href="${escapeHtml(openUrl)}" target="_blank" rel="noopener">${escapeHtml(t('task_pool.openChat'))}</a>` : ''}
       <button type="button" data-action="group-manage">${escapeHtml(t('groups.manage'))}</button>
     </div>
   </section>`;
 }
 
-function issueGroupManagementHtml(issue: DashboardIssue): string {
-  const chat = groupChatForIssue(issue);
-  if (!issue.chatId || !chat) return '';
+function taskPoolGroupManagementHtml(taskPool: DashboardTaskPool): string {
+  const chat = groupChatForTaskPool(taskPool);
+  if (!taskPool.chatId || !chat) return '';
   const members = inChatBots(chat);
   const inChatSet = new Set(members.map(bot => bot.larkAppId));
   const missing = bots.filter(bot => !inChatSet.has(bot.larkAppId));
   const ownerAppId = typeof chat.ownerId === 'string' ? chat.ownerId : '';
-  const openUrl = groupOpenUrl(issue);
-  const title = groupDisplayName(issue, chat);
-  return `<section class="issue-group-management" data-chat-id="${escapeHtml(issue.chatId)}">
+  const openUrl = groupOpenUrl(taskPool);
+  const title = groupDisplayName(taskPool, chat);
+  return `<section class="task_pool-group-management" data-chat-id="${escapeHtml(taskPool.chatId)}">
     <header>
       <div>
         <h4>${escapeHtml(t('groups.manageTitle', { name: title }))}</h4>
-        <p><b>chatId:</b> <code>${escapeHtml(issue.chatId)}</code></p>
+        <p><b>chatId:</b> <code>${escapeHtml(taskPool.chatId)}</code></p>
         <p><b>${escapeHtml(t('groups.owner'))}:</b> <code>${escapeHtml(chat.ownerId ?? t('common.unknown'))}</code></p>
       </div>
-      ${openUrl ? `<a class="btn-link primary" href="${escapeHtml(openUrl)}" target="_blank" rel="noopener">${escapeHtml(t('issues.openChat'))}</a>` : ''}
+      ${openUrl ? `<a class="btn-link primary" href="${escapeHtml(openUrl)}" target="_blank" rel="noopener">${escapeHtml(t('task_pool.openChat'))}</a>` : ''}
     </header>
 
     <fieldset>
-      <legend>${escapeHtml(t('issues.group.addBots'))}</legend>
+      <legend>${escapeHtml(t('task_pool.group.addBots'))}</legend>
       ${missing.length
         ? `${renderBotCheckboxes(bots, inChatSet)}
-          <button type="button" data-action="group-add-selected">${escapeHtml(t('issues.group.addSelected'))}</button>`
-        : `<p class="empty">${escapeHtml(t('issues.group.noMissing'))}</p>`}
+          <button type="button" data-action="group-add-selected">${escapeHtml(t('task_pool.group.addSelected'))}</button>`
+        : `<p class="empty">${escapeHtml(t('task_pool.group.noMissing'))}</p>`}
     </fieldset>
 
     <fieldset>
       <legend>${escapeHtml(t('groups.oncall'))}</legend>
       <p><small>${escapeHtml(t('groups.oncallHelp'))}</small></p>
       ${members.length === 0
-        ? `<p class="empty">${escapeHtml(t('issues.group.noMembers'))}</p>`
+        ? `<p class="empty">${escapeHtml(t('task_pool.group.noMembers'))}</p>`
         : members.map(bot => {
           const enabled = !!bot.oncallChat;
           const workingDir = bot.oncallChat?.workingDir ?? '';
-          return `<div class="oncall-row issue-group-oncall-row" data-bot="${escapeHtml(bot.larkAppId)}">
+          return `<div class="oncall-row task_pool-group-oncall-row" data-bot="${escapeHtml(bot.larkAppId)}">
             <label class="checkbox-row">
               <input type="checkbox" data-action="toggle" ${enabled ? 'checked' : ''}>
               <strong>${escapeHtml(bot.botName ?? bot.larkAppId)}</strong>
@@ -263,7 +263,7 @@ function issueGroupManagementHtml(issue: DashboardIssue): string {
     <fieldset>
       <legend>${escapeHtml(t('groups.leaveTitle'))}</legend>
       ${members.length === 0
-        ? `<p class="empty">${escapeHtml(t('issues.group.noMembers'))}</p>`
+        ? `<p class="empty">${escapeHtml(t('task_pool.group.noMembers'))}</p>`
         : members.map(bot => `<label class="checkbox-row">
           <input type="checkbox" name="group-leave-bot" value="${escapeHtml(bot.larkAppId)}">
           ${escapeHtml(bot.botName ?? bot.larkAppId)}
@@ -271,108 +271,108 @@ function issueGroupManagementHtml(issue: DashboardIssue): string {
         </label>`).join('')}
     </fieldset>
 
-    <div class="actions issue-group-danger-actions">
+    <div class="actions task_pool-group-danger-actions">
       <button type="button" data-action="group-leave-selected" ${members.length === 0 ? 'disabled' : ''}>${escapeHtml(t('groups.leaveSelected'))}</button>
       <button type="button" data-action="group-disband" class="contrast" ${members.length === 0 ? 'disabled' : ''}>${escapeHtml(t('groups.disband'))}</button>
     </div>
     <p class="hint-warn"><small>${escapeHtml(t('groups.dangerHint'))}</small></p>
-    <div class="issue-group-status" data-group-status aria-live="polite"></div>
+    <div class="task_pool-group-status" data-group-status aria-live="polite"></div>
   </section>`;
 }
 
-function filtered(form: HTMLFormElement): DashboardIssue[] {
+function filtered(form: HTMLFormElement): DashboardTaskPool[] {
   const fd = new FormData(form);
   const q = String(fd.get('q') ?? '').trim().toLowerCase();
   const status = String(fd.get('status') ?? '');
   const priority = String(fd.get('priority') ?? '');
-  return issues.filter(issue => {
-    if (status && issue.status !== status) return false;
-    if (priority && issue.priority !== priority) return false;
+  return taskPools.filter(taskPool => {
+    if (status && taskPool.status !== status) return false;
+    if (priority && taskPool.priority !== priority) return false;
     if (!q) return true;
     const hay = [
-      issue.title,
-      issue.prompt,
-      issue.chatId ?? '',
-      associatedBotIds(issue).map(botName).join(' '),
+      taskPool.title,
+      taskPool.prompt,
+      taskPool.chatId ?? '',
+      associatedBotIds(taskPool).map(botName).join(' '),
     ].join(' ').toLowerCase();
     return hay.includes(q);
   });
 }
 
-function issueCard(issue: DashboardIssue): string {
-  const started = issue.status === 'in_progress' && !!issue.chatId;
-  const failedCount = issue.failed?.length ?? 0;
-  const spawnedCount = issue.spawned?.length ?? 0;
-  const associatedIds = associatedBotIds(issue);
-  return `<article class="issue-card" data-id="${escapeHtml(issue.id)}">
+function taskPoolCard(taskPool: DashboardTaskPool): string {
+  const started = taskPool.status === 'in_progress' && !!taskPool.chatId;
+  const failedCount = taskPool.failed?.length ?? 0;
+  const spawnedCount = taskPool.spawned?.length ?? 0;
+  const associatedIds = associatedBotIds(taskPool);
+  return `<article class="task_pool-card" data-id="${escapeHtml(taskPool.id)}">
     <header>
       <div>
-        <span class="issue-status issue-status-${escapeHtml(issue.status)}">${escapeHtml(statusLabel(issue.status))}</span>
-        <span class="issue-priority issue-priority-${escapeHtml(issue.priority)}">${escapeHtml(priorityLabel(issue.priority))}</span>
-        <h2>${escapeHtml(issue.title)}</h2>
+        <span class="task_pool-status task_pool-status-${escapeHtml(taskPool.status)}">${escapeHtml(statusLabel(taskPool.status))}</span>
+        <span class="task_pool-priority task_pool-priority-${escapeHtml(taskPool.priority)}">${escapeHtml(priorityLabel(taskPool.priority))}</span>
+        <h2>${escapeHtml(taskPool.title)}</h2>
       </div>
-      <div class="issue-card-actions">
-        <button type="button" data-action="start" ${started ? 'disabled' : ''}>${escapeHtml(t(started ? 'issues.started' : 'issues.start'))}</button>
-        <button type="button" data-action="edit">${escapeHtml(t('issues.edit'))}</button>
-        <button type="button" data-action="archive" ${issue.status === 'archived' ? 'disabled' : ''}>${escapeHtml(t('issues.archive'))}</button>
-        <button type="button" data-action="delete" class="contrast">${escapeHtml(t('issues.delete'))}</button>
+      <div class="task_pool-card-actions">
+        <button type="button" data-action="start" ${started ? 'disabled' : ''}>${escapeHtml(t(started ? 'task_pool.started' : 'task_pool.start'))}</button>
+        <button type="button" data-action="edit">${escapeHtml(t('task_pool.edit'))}</button>
+        <button type="button" data-action="archive" ${taskPool.status === 'archived' ? 'disabled' : ''}>${escapeHtml(t('task_pool.archive'))}</button>
+        <button type="button" data-action="delete" class="contrast">${escapeHtml(t('task_pool.delete'))}</button>
       </div>
     </header>
-    <div class="issue-card-controls">
+    <div class="task_pool-card-controls">
       <label>
-        <span>${escapeHtml(t('issues.form.status'))}</span>
-        <select data-action="status">${statusOptions(issue.status)}</select>
+        <span>${escapeHtml(t('task_pool.form.status'))}</span>
+        <select data-action="status">${statusOptions(taskPool.status)}</select>
       </label>
       <label>
-        <span>${escapeHtml(t('issues.form.priority'))}</span>
-        <select data-action="priority">${priorityOptions(issue.priority)}</select>
+        <span>${escapeHtml(t('task_pool.form.priority'))}</span>
+        <select data-action="priority">${priorityOptions(taskPool.priority)}</select>
       </label>
     </div>
-    <label class="issue-prompt-box">
-      <span>${escapeHtml(t('issues.form.prompt'))}</span>
-      <textarea data-action="prompt" rows="4" required>${escapeHtml(issue.prompt)}</textarea>
+    <label class="task_pool-prompt-box">
+      <span>${escapeHtml(t('task_pool.form.prompt'))}</span>
+      <textarea data-action="prompt" rows="4" required>${escapeHtml(taskPool.prompt)}</textarea>
     </label>
-    <div class="issue-meta">
-      <span>${escapeHtml(modeLabel(issue.mode))}</span>
-      <span>${escapeHtml(columnLabel(issue.column))}</span>
-      <span>${escapeHtml(t('issues.updated', { time: fmtTime(issue.updatedAt) }))}</span>
-      ${spawnedCount ? `<span>${escapeHtml(t('issues.spawned', { count: spawnedCount }))}</span>` : ''}
-      ${failedCount ? `<span class="issue-failed">${escapeHtml(t('issues.failedCount', { count: failedCount }))}</span>` : ''}
+    <div class="task_pool-meta">
+      <span>${escapeHtml(modeLabel(taskPool.mode))}</span>
+      <span>${escapeHtml(columnLabel(taskPool.column))}</span>
+      <span>${escapeHtml(t('task_pool.updated', { time: fmtTime(taskPool.updatedAt) }))}</span>
+      ${spawnedCount ? `<span>${escapeHtml(t('task_pool.spawned', { count: spawnedCount }))}</span>` : ''}
+      ${failedCount ? `<span class="task_pool-failed">${escapeHtml(t('task_pool.failedCount', { count: failedCount }))}</span>` : ''}
     </div>
-    <div class="issue-bots">${botChips(associatedIds) || `<span class="muted">${escapeHtml(t('issues.group.noMembers'))}</span>`}</div>
-    ${issueGroupCard(issue)}
+    <div class="task_pool-bots">${botChips(associatedIds) || `<span class="muted">${escapeHtml(t('task_pool.group.noMembers'))}</span>`}</div>
+    ${taskPoolGroupCard(taskPool)}
   </article>`;
 }
 
 function renderList(list: HTMLElement, form: HTMLFormElement): void {
   const rows = filtered(form);
   const fd = new FormData(form);
-  const groupBy: IssueGroupBy = fd.get('groupBy') === 'priority' ? 'priority' : 'status';
-  const selectedStatus = String(fd.get('status') ?? '') as IssueStatus | '';
-  const selectedPriority = String(fd.get('priority') ?? '') as IssuePriority | '';
-  list.classList.toggle('issue-list-grouped', rows.length > 0);
+  const groupBy: TaskPoolGroupBy = fd.get('groupBy') === 'priority' ? 'priority' : 'status';
+  const selectedStatus = String(fd.get('status') ?? '') as TaskPoolStatus | '';
+  const selectedPriority = String(fd.get('priority') ?? '') as TaskPoolPriority | '';
+  list.classList.toggle('task_pool-list-grouped', rows.length > 0);
   if (rows.length === 0) {
-    list.innerHTML = `<div class="empty">${escapeHtml(t('issues.empty'))}</div>`;
+    list.innerHTML = `<div class="empty">${escapeHtml(t('task_pool.empty'))}</div>`;
     return;
   }
   const groups = groupBy === 'priority'
-    ? (selectedPriority ? [selectedPriority] : ISSUE_PRIORITIES)
-    : (selectedStatus ? [selectedStatus] : ISSUE_STATUSES);
-  const buckets = new Map<string, DashboardIssue[]>(groups.map(group => [group, []]));
-  for (const issue of rows) {
-    const key = groupBy === 'priority' ? issue.priority : issue.status;
-    buckets.get(key)?.push(issue);
+    ? (selectedPriority ? [selectedPriority] : TASK_POOL_PRIORITIES)
+    : (selectedStatus ? [selectedStatus] : TASK_POOL_STATUSES);
+  const buckets = new Map<string, DashboardTaskPool[]>(groups.map(group => [group, []]));
+  for (const taskPool of rows) {
+    const key = groupBy === 'priority' ? taskPool.priority : taskPool.status;
+    buckets.get(key)?.push(taskPool);
   }
-  list.innerHTML = `<div class="issue-board">${groups.map(group => {
+  list.innerHTML = `<div class="task_pool-board">${groups.map(group => {
     const groupedRows = buckets.get(group) ?? [];
     const title = groupBy === 'priority' ? priorityLabel(group) : statusLabel(group);
-    return `<section class="issue-column-group">
+    return `<section class="task_pool-column-group">
       <header>
         <h2>${escapeHtml(title)}</h2>
         <span>${escapeHtml(String(groupedRows.length))}</span>
       </header>
-      <div class="issue-column-items">
-        ${groupedRows.length ? groupedRows.map(issueCard).join('') : `<div class="empty">${escapeHtml(t('issues.emptyGroup'))}</div>`}
+      <div class="task_pool-column-items">
+        ${groupedRows.length ? groupedRows.map(taskPoolCard).join('') : `<div class="empty">${escapeHtml(t('task_pool.emptyGroup'))}</div>`}
       </div>
     </section>`;
   }).join('')}</div>`;
@@ -382,82 +382,82 @@ function selectedBotIds(form: HTMLFormElement): string[] {
   return Array.from(form.querySelectorAll<HTMLInputElement>('input[name=bot]:checked')).map(input => input.value);
 }
 
-function issueFormHtml(issue?: DashboardIssue): string {
-  const groupManaged = !!issue?.chatId;
-  const picked = new Set(issue ? associatedBotIds(issue) : []);
-  const mode = issue?.mode ?? 'lead';
-  const column = issue?.column ?? 'in_progress';
-  const priority = issue?.priority ?? 'P2';
-  const formGroupName = issue
-    ? groupManaged ? groupDisplayName(issue, groupChatForIssue(issue)) : issue.groupName ?? ''
+function taskPoolFormHtml(taskPool?: DashboardTaskPool): string {
+  const groupManaged = !!taskPool?.chatId;
+  const picked = new Set(taskPool ? associatedBotIds(taskPool) : []);
+  const mode = taskPool?.mode ?? 'lead';
+  const column = taskPool?.column ?? 'in_progress';
+  const priority = taskPool?.priority ?? 'P2';
+  const formGroupName = taskPool
+    ? groupManaged ? groupDisplayName(taskPool, groupChatForTaskPool(taskPool)) : taskPool.groupName ?? ''
     : '';
   const botRows = bots.map(bot => `
-    <label class="checkbox-row issue-bot-row">
+    <label class="checkbox-row task_pool-bot-row">
       <input type="checkbox" name="bot" value="${escapeHtml(bot.larkAppId)}"${picked.has(bot.larkAppId) ? ' checked' : ''}${groupManaged ? ' disabled' : ''}>
       <span>${escapeHtml(bot.botName)}</span>
       <small>${escapeHtml(bot.larkAppId)}</small>
     </label>`).join('');
-  return `<article class="issue-editor">
-    <header><h3>${escapeHtml(t(issue ? 'issues.editTitle' : 'issues.newTitle'))}</h3></header>
-    <form id="issue-form">
+  return `<article class="task_pool-editor">
+    <header><h3>${escapeHtml(t(taskPool ? 'task_pool.editTitle' : 'task_pool.newTitle'))}</h3></header>
+    <form id="task_pool-form">
       <label class="form-row">
-        <span>${escapeHtml(t('issues.form.title'))}</span>
-        <input type="text" name="title" maxlength="120" value="${escapeHtml(issue?.title ?? '')}" placeholder="${escapeHtml(t('issues.form.titlePlaceholder'))}">
+        <span>${escapeHtml(t('task_pool.form.title'))}</span>
+        <input type="text" name="title" maxlength="120" value="${escapeHtml(taskPool?.title ?? '')}" placeholder="${escapeHtml(t('task_pool.form.titlePlaceholder'))}">
       </label>
       <label class="form-row">
-        <span>${escapeHtml(t('issues.form.prompt'))}</span>
-        <textarea name="prompt" rows="9" required placeholder="${escapeHtml(t('issues.form.promptPlaceholder'))}">${escapeHtml(issue?.prompt ?? '')}</textarea>
+        <span>${escapeHtml(t('task_pool.form.prompt'))}</span>
+        <textarea name="prompt" rows="9" required placeholder="${escapeHtml(t('task_pool.form.promptPlaceholder'))}">${escapeHtml(taskPool?.prompt ?? '')}</textarea>
       </label>
-      <fieldset class="issue-bot-picker">
-        <legend>${escapeHtml(t('issues.form.bots'))}</legend>
-        ${groupManaged ? `<p class="issue-group-edit-note">${escapeHtml(t('issues.group.managedByGroup'))}</p>` : ''}
-        ${botRows || `<p class="empty">${escapeHtml(t('issues.noBots'))}</p>`}
+      <fieldset class="task_pool-bot-picker">
+        <legend>${escapeHtml(t('task_pool.form.bots'))}</legend>
+        ${groupManaged ? `<p class="task_pool-group-edit-note">${escapeHtml(t('task_pool.group.managedByGroup'))}</p>` : ''}
+        ${botRows || `<p class="empty">${escapeHtml(t('task_pool.noBots'))}</p>`}
       </fieldset>
       <label class="form-row">
-        <span>${escapeHtml(t('issues.form.priority'))}</span>
+        <span>${escapeHtml(t('task_pool.form.priority'))}</span>
         <select name="priority">${priorityOptions(priority)}</select>
       </label>
       <fieldset>
-        <legend>${escapeHtml(t('issues.form.mode'))}</legend>
-        <label><input type="radio" name="mode" value="lead"${mode === 'lead' ? ' checked' : ''}> ${escapeHtml(t('issues.mode.lead'))}</label>
-        <label><input type="radio" name="mode" value="all"${mode === 'all' ? ' checked' : ''}> ${escapeHtml(t('issues.mode.all'))}</label>
+        <legend>${escapeHtml(t('task_pool.form.mode'))}</legend>
+        <label><input type="radio" name="mode" value="lead"${mode === 'lead' ? ' checked' : ''}> ${escapeHtml(t('task_pool.mode.lead'))}</label>
+        <label><input type="radio" name="mode" value="all"${mode === 'all' ? ' checked' : ''}> ${escapeHtml(t('task_pool.mode.all'))}</label>
       </fieldset>
-      <label class="form-row issue-lead-row">
-        <span>${escapeHtml(t('issues.form.lead'))}</span>
+      <label class="form-row task_pool-lead-row">
+        <span>${escapeHtml(t('task_pool.form.lead'))}</span>
         <select name="leadLarkAppId"></select>
       </label>
       <fieldset>
-        <legend>${escapeHtml(t('issues.form.column'))}</legend>
-        <label><input type="radio" name="column" value="in_progress"${column === 'in_progress' ? ' checked' : ''}> ${escapeHtml(t('issues.column.inProgress'))}</label>
-        <label><input type="radio" name="column" value="backlog"${column === 'backlog' ? ' checked' : ''}> ${escapeHtml(t('issues.column.backlog'))}</label>
+        <legend>${escapeHtml(t('task_pool.form.column'))}</legend>
+        <label><input type="radio" name="column" value="in_progress"${column === 'in_progress' ? ' checked' : ''}> ${escapeHtml(t('task_pool.column.inProgress'))}</label>
+        <label><input type="radio" name="column" value="backlog"${column === 'backlog' ? ' checked' : ''}> ${escapeHtml(t('task_pool.column.backlog'))}</label>
       </fieldset>
-      <details class="issue-advanced">
-        <summary>${escapeHtml(t('issues.form.advanced'))}</summary>
+      <details class="task_pool-advanced">
+        <summary>${escapeHtml(t('task_pool.form.advanced'))}</summary>
         <label class="form-row">
-          <span>${escapeHtml(t('issues.form.groupName'))}</span>
+          <span>${escapeHtml(t('task_pool.form.groupName'))}</span>
           <input type="text" name="groupName" maxlength="60" value="${escapeHtml(formGroupName)}"${groupManaged ? ' readonly' : ''}>
         </label>
         <label class="form-row">
-          <span>${escapeHtml(t('issues.form.workingDir'))}</span>
-          <input type="text" name="bindWorkingDir" value="${escapeHtml(issue?.bindWorkingDir ?? '')}">
+          <span>${escapeHtml(t('task_pool.form.workingDir'))}</span>
+          <input type="text" name="bindWorkingDir" value="${escapeHtml(taskPool?.bindWorkingDir ?? '')}">
         </label>
       </details>
-      <div class="actions issue-editor-actions">
-        <button type="submit" class="primary">${escapeHtml(t(issue ? 'issues.save' : 'issues.create'))}</button>
-        <button type="button" id="issue-cancel">${escapeHtml(t('issues.cancel'))}</button>
+      <div class="actions task_pool-editor-actions">
+        <button type="submit" class="primary">${escapeHtml(t(taskPool ? 'task_pool.save' : 'task_pool.create'))}</button>
+        <button type="button" id="task_pool-cancel">${escapeHtml(t('task_pool.cancel'))}</button>
       </div>
     </form>
-    ${issue ? issueGroupManagementHtml(issue) : ''}
+    ${taskPool ? taskPoolGroupManagementHtml(taskPool) : ''}
   </article>`;
 }
 
-function wireIssueForm(
+function wireTaskPoolForm(
   dialog: HTMLDialogElement,
-  issue: DashboardIssue | undefined,
+  taskPool: DashboardTaskPool | undefined,
   onSaved: () => void,
 ): void {
-  const form = dialog.querySelector<HTMLFormElement>('#issue-form')!;
-  const leadRow = dialog.querySelector<HTMLElement>('.issue-lead-row')!;
+  const form = dialog.querySelector<HTMLFormElement>('#task_pool-form')!;
+  const leadRow = dialog.querySelector<HTMLElement>('.task_pool-lead-row')!;
   const leadSelect = dialog.querySelector<HTMLSelectElement>('select[name=leadLarkAppId]')!;
   const mode = () => form.querySelector<HTMLInputElement>('input[name=mode]:checked')?.value ?? 'lead';
 
@@ -469,8 +469,8 @@ function wireIssueForm(
     leadSelect.disabled = ids.length === 0;
     leadSelect.innerHTML = ids.length
       ? ids.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(botName(id))}</option>`).join('')
-      : `<option value="">${escapeHtml(t('issues.form.pickBotFirst'))}</option>`;
-    const preferred = issue?.leadLarkAppId && ids.includes(issue.leadLarkAppId) ? issue.leadLarkAppId : ids[0];
+      : `<option value="">${escapeHtml(t('task_pool.form.pickBotFirst'))}</option>`;
+    const preferred = taskPool?.leadLarkAppId && ids.includes(taskPool.leadLarkAppId) ? taskPool.leadLarkAppId : ids[0];
     if (preferred) leadSelect.value = preferred;
   }
 
@@ -479,31 +479,31 @@ function wireIssueForm(
   });
   syncLead();
 
-  dialog.querySelector<HTMLButtonElement>('#issue-cancel')!.onclick = () => dialog.close();
+  dialog.querySelector<HTMLButtonElement>('#task_pool-cancel')!.onclick = () => dialog.close();
   form.onsubmit = async ev => {
     ev.preventDefault();
     const fd = new FormData(form);
     const larkAppIds = selectedBotIds(form);
-    const issueMode = String(fd.get('mode') ?? 'lead') as IssueMode;
+    const taskPoolMode = String(fd.get('mode') ?? 'lead') as TaskPoolMode;
     const body = {
       title: String(fd.get('title') ?? '').trim(),
       prompt: String(fd.get('prompt') ?? '').trim(),
       larkAppIds,
-      mode: issueMode,
-      leadLarkAppId: issueMode === 'lead' ? String(fd.get('leadLarkAppId') ?? '') : undefined,
-      column: String(fd.get('column') ?? 'in_progress') as IssueColumn,
-      priority: String(fd.get('priority') ?? 'P2') as IssuePriority,
+      mode: taskPoolMode,
+      leadLarkAppId: taskPoolMode === 'lead' ? String(fd.get('leadLarkAppId') ?? '') : undefined,
+      column: String(fd.get('column') ?? 'in_progress') as TaskPoolColumn,
+      priority: String(fd.get('priority') ?? 'P2') as TaskPoolPriority,
       groupName: String(fd.get('groupName') ?? '').trim(),
       bindWorkingDir: String(fd.get('bindWorkingDir') ?? '').trim(),
     };
-    if (!body.prompt) { alert(t('issues.errPrompt')); return; }
-    if (body.larkAppIds.length === 0) { alert(t('issues.errBot')); return; }
-    if (body.mode === 'lead' && !body.leadLarkAppId) { alert(t('issues.errLead')); return; }
+    if (!body.prompt) { alert(t('task_pool.errPrompt')); return; }
+    if (body.larkAppIds.length === 0) { alert(t('task_pool.errBot')); return; }
+    if (body.mode === 'lead' && !body.leadLarkAppId) { alert(t('task_pool.errLead')); return; }
     const submitBtn = form.querySelector<HTMLButtonElement>('button[type=submit]');
     if (submitBtn) submitBtn.disabled = true;
     try {
-      const r = await fetch(issue ? `/api/issues/${encodeURIComponent(issue.id)}` : '/api/issues', {
-        method: issue ? 'PUT' : 'POST',
+      const r = await fetch(taskPool ? `/api/task_pool/${encodeURIComponent(taskPool.id)}` : '/api/task_pool', {
+        method: taskPool ? 'PUT' : 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -512,63 +512,63 @@ function wireIssueForm(
         dialog.close();
         onSaved();
       } else if (r.status !== 401) {
-        alert(`${t('issues.saveFailed')}: ${resp?.error ?? r.status}`);
+        alert(`${t('task_pool.saveFailed')}: ${resp?.error ?? r.status}`);
       }
     } catch (e) {
-      alert(`${t('issues.saveFailed')}: ${e}`);
+      alert(`${t('task_pool.saveFailed')}: ${e}`);
     } finally {
       if (submitBtn) submitBtn.disabled = false;
     }
   };
 }
 
-function openEditor(dialog: HTMLDialogElement, issue: DashboardIssue | undefined, onSaved: () => void): void {
-  dialog.innerHTML = issueFormHtml(issue);
+function openEditor(dialog: HTMLDialogElement, taskPool: DashboardTaskPool | undefined, onSaved: () => void): void {
+  dialog.innerHTML = taskPoolFormHtml(taskPool);
   dialog.showModal();
-  wireIssueForm(dialog, issue, onSaved);
-  if (issue?.chatId) wireIssueGroupManagement(dialog, issue, onSaved);
+  wireTaskPoolForm(dialog, taskPool, onSaved);
+  if (taskPool?.chatId) wireTaskPoolGroupManagement(dialog, taskPool, onSaved);
 }
 
-async function patchIssue(id: string, patch: IssuePatch, options?: { silent?: boolean }): Promise<boolean> {
-  const r = await fetch(`/api/issues/${encodeURIComponent(id)}`, {
+async function patchTaskPool(id: string, patch: TaskPoolPatch, options?: { silent?: boolean }): Promise<boolean> {
+  const r = await fetch(`/api/task_pool/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
   });
   if (!r.ok && r.status !== 401) {
     const body = await r.json().catch(() => ({}));
-    if (!options?.silent) alert(`${t('issues.saveFailed')}: ${body?.error ?? r.status}`);
+    if (!options?.silent) alert(`${t('task_pool.saveFailed')}: ${body?.error ?? r.status}`);
     return false;
   }
   return r.ok;
 }
 
-async function syncIssueGroupFields(issue: DashboardIssue): Promise<boolean> {
-  const chat = groupChatFromMatrix(issue);
+async function syncTaskPoolGroupFields(taskPool: DashboardTaskPool): Promise<boolean> {
+  const chat = groupChatFromMatrix(taskPool);
   if (!chat) return false;
-  const patch: IssuePatch = {};
-  const memberIds = groupTruthBotIds(issue).sort();
-  const currentIds = [...issue.larkAppIds].sort();
+  const patch: TaskPoolPatch = {};
+  const memberIds = groupTruthBotIds(taskPool).sort();
+  const currentIds = [...taskPool.larkAppIds].sort();
   if (memberIds.length > 0 && !arraysEqual(memberIds, currentIds)) {
     patch.larkAppIds = memberIds;
   }
   const groupName = typeof chat.name === 'string' ? chat.name.trim() : '';
-  if (groupName && groupName !== (issue.groupName ?? '')) {
+  if (groupName && groupName !== (taskPool.groupName ?? '')) {
     patch.groupName = groupName;
   }
   return Object.keys(patch).length > 0
-    ? patchIssue(issue.id, patch, { silent: true })
+    ? patchTaskPool(taskPool.id, patch, { silent: true })
     : false;
 }
 
-async function syncAllIssueGroupFields(): Promise<void> {
-  const changed = await Promise.all(issues.map(issue => syncIssueGroupFields(issue)));
-  if (changed.some(Boolean)) await loadIssues();
+async function syncAllTaskPoolGroupFields(): Promise<void> {
+  const changed = await Promise.all(taskPools.map(taskPool => syncTaskPoolGroupFields(taskPool)));
+  if (changed.some(Boolean)) await loadTaskPools();
 }
 
-async function refreshIssueGroupLink(issue: DashboardIssue): Promise<void> {
+async function refreshTaskPoolGroupLink(taskPool: DashboardTaskPool): Promise<void> {
   await loadBots();
-  await syncIssueGroupFields(issue);
+  await syncTaskPoolGroupFields(taskPool);
 }
 
 function setGroupStatus(panel: HTMLElement, html: string): void {
@@ -580,21 +580,21 @@ function groupError(title: string, reason: unknown): string {
   return `<p class="hint-warn"><strong>${escapeHtml(title)}</strong><br><small>${escapeHtml(String(reason ?? 'unknown'))}</small></p>`;
 }
 
-function openGroupManager(dialog: HTMLDialogElement, issue: DashboardIssue, onChanged: () => void): void {
-  dialog.innerHTML = `<article class="issue-editor issue-group-manager-dialog">
-    ${issueGroupManagementHtml(issue)}
+function openGroupManager(dialog: HTMLDialogElement, taskPool: DashboardTaskPool, onChanged: () => void): void {
+  dialog.innerHTML = `<article class="task_pool-editor task_pool-group-manager-dialog">
+    ${taskPoolGroupManagementHtml(taskPool)}
     <form method="dialog"><button>${escapeHtml(t('sessions.dismiss'))}</button></form>
   </article>`;
   if (!dialog.open) dialog.showModal();
-  wireIssueGroupManagement(dialog, issue, onChanged);
+  wireTaskPoolGroupManagement(dialog, taskPool, onChanged);
 }
 
-function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onChanged: () => void): void {
-  const panel = root.querySelector<HTMLElement>('.issue-group-management');
-  if (!panel || !issue.chatId) return;
-  const chatId = issue.chatId;
+function wireTaskPoolGroupManagement(root: HTMLElement, taskPool: DashboardTaskPool, onChanged: () => void): void {
+  const panel = root.querySelector<HTMLElement>('.task_pool-group-management');
+  if (!panel || !taskPool.chatId) return;
+  const chatId = taskPool.chatId;
 
-  panel.querySelectorAll<HTMLDivElement>('.issue-group-oncall-row').forEach(row => {
+  panel.querySelectorAll<HTMLDivElement>('.task_pool-group-oncall-row').forEach(row => {
     const cb = row.querySelector<HTMLInputElement>('input[data-action=toggle]');
     const input = row.querySelector<HTMLInputElement>('input[data-input=workingDir]');
     if (!cb || !input) return;
@@ -628,7 +628,7 @@ function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onCh
             setGroupStatus(panel, groupError('无法添加 bot', '当前群里没有可代理操作的 bot。请先在飞书里手动拉入一个 bot，然后重试。'));
           } else if (body.result) {
             setGroupStatus(panel, renderAddBotsResultSummary(body.result));
-            await refreshIssueGroupLink(issue);
+            await refreshTaskPoolGroupLink(taskPool);
             onChanged();
           } else {
             setGroupStatus(panel, groupError('响应异常', JSON.stringify(body)));
@@ -641,7 +641,7 @@ function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onCh
       })();
     } else if (action === 'group-oncall-save') {
       void (async () => {
-        const row = btn.closest<HTMLElement>('.issue-group-oncall-row');
+        const row = btn.closest<HTMLElement>('.task_pool-group-oncall-row');
         const appId = row?.dataset.bot ?? '';
         const checkbox = row?.querySelector<HTMLInputElement>('input[data-action=toggle]');
         const input = row?.querySelector<HTMLInputElement>('input[data-input=workingDir]');
@@ -672,7 +672,7 @@ function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onCh
               ? `✓ 已绑定 → ${body.resolvedPath ?? workingDir}`
               : '✓ 已解绑';
             statusEl.classList.add('hint-ok');
-            await refreshIssueGroupLink(issue);
+            await refreshTaskPoolGroupLink(taskPool);
             onChanged();
           } else {
             statusEl.textContent = `✗ ${body.error ?? r.status}`;
@@ -709,7 +709,7 @@ function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onCh
             return `${x.larkAppId}: OK${note}`;
           }).join('\n');
           alert(lines || `Unexpected: ${JSON.stringify(body)}`);
-          await refreshIssueGroupLink(issue);
+          await refreshTaskPoolGroupLink(taskPool);
           onChanged();
         } catch (e) {
           alert('Network error: ' + e);
@@ -719,11 +719,11 @@ function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onCh
       })();
     } else if (action === 'group-disband') {
       void (async () => {
-        const chat = groupChatForIssue(issue);
+        const chat = groupChatForTaskPool(taskPool);
         const members = inChatBots(chat);
         const ownerAppId = typeof chat?.ownerId === 'string' ? chat.ownerId : '';
         if (members.length === 0) return;
-        if (!confirm(`确定解散群聊「${groupDisplayName(issue, chat)}」？此操作不可恢复，本群所有机器人会话也会一并关闭。`)) return;
+        if (!confirm(`确定解散群聊「${groupDisplayName(taskPool, chat)}」？此操作不可恢复，本群所有机器人会话也会一并关闭。`)) return;
         btn.disabled = true;
         const ordered = [...members].sort((a, b) =>
           (b.larkAppId === ownerAppId ? 1 : 0) - (a.larkAppId === ownerAppId ? 1 : 0)
@@ -745,7 +745,7 @@ function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onCh
                 ? ''
                 : failed === 0 ? `\n关闭了 ${ok} 个会话。` : `\n关闭了 ${ok} 个会话，${failed} 个会话关闭失败。`;
               alert(`已解散（由 ${member.botName ?? member.larkAppId} 执行）${closedNote}`);
-              await refreshIssueGroupLink(issue);
+              await refreshTaskPoolGroupLink(taskPool);
               onChanged();
               if (root instanceof HTMLDialogElement) root.close();
               return;
@@ -762,18 +762,18 @@ function wireIssueGroupManagement(root: HTMLElement, issue: DashboardIssue, onCh
   });
 }
 
-export function wireIssuesPage(root: HTMLElement): () => void {
+export function wireTaskPoolPage(root: HTMLElement): () => void {
   let disposed = false;
   let renderTimer: number | undefined;
-  const list = root.querySelector<HTMLElement>('#issue-list')!;
-  const form = root.querySelector<HTMLFormElement>('#issue-filters')!;
-  const dialog = root.querySelector<HTMLDialogElement>('#issue-dialog')!;
-  const createBtn = root.querySelector<HTMLButtonElement>('#issue-create')!;
-  const refreshBtn = root.querySelector<HTMLButtonElement>('#issue-refresh')!;
+  const list = root.querySelector<HTMLElement>('#task_pool-list')!;
+  const form = root.querySelector<HTMLFormElement>('#task_pool-filters')!;
+  const dialog = root.querySelector<HTMLDialogElement>('#task_pool-dialog')!;
+  const createBtn = root.querySelector<HTMLButtonElement>('#task_pool-create')!;
+  const refreshBtn = root.querySelector<HTMLButtonElement>('#task_pool-refresh')!;
 
   const reload = async (): Promise<void> => {
-    await Promise.all([loadIssues(), loadBots()]);
-    await syncAllIssueGroupFields();
+    await Promise.all([loadTaskPools(), loadBots()]);
+    await syncAllTaskPoolGroupFields();
     if (!disposed) renderList(list, form);
   };
   const renderNow = (): void => {
@@ -799,41 +799,41 @@ export function wireIssuesPage(root: HTMLElement): () => void {
   list.addEventListener('click', ev => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
     if (!btn) return;
-    const card = btn.closest<HTMLElement>('.issue-card');
+    const card = btn.closest<HTMLElement>('.task_pool-card');
     const id = card?.dataset.id ?? '';
-    const issue = issues.find(x => x.id === id);
-    if (!issue) return;
+    const taskPool = taskPools.find(x => x.id === id);
+    if (!taskPool) return;
     const action = btn.dataset.action;
     if (action === 'group-manage') {
-      openGroupManager(dialog, issue, () => { void reload(); });
+      openGroupManager(dialog, taskPool, () => { void reload(); });
     } else if (action === 'edit') {
-      openEditor(dialog, issue, () => { void reload(); });
+      openEditor(dialog, taskPool, () => { void reload(); });
     } else if (action === 'start') {
       btn.disabled = true;
-      btn.textContent = t('issues.starting');
+      btn.textContent = t('task_pool.starting');
       void (async () => {
         try {
-          const r = await fetch(`/api/issues/${encodeURIComponent(id)}/start`, { method: 'POST' });
+          const r = await fetch(`/api/task_pool/${encodeURIComponent(id)}/start`, { method: 'POST' });
           const body = await r.json().catch(() => ({}));
-          if (!r.ok && r.status !== 401) alert(`${t('issues.startFailed')}: ${body?.error ?? r.status}`);
+          if (!r.ok && r.status !== 401) alert(`${t('task_pool.startFailed')}: ${body?.error ?? r.status}`);
         } catch (e) {
-          alert(`${t('issues.startFailed')}: ${e}`);
+          alert(`${t('task_pool.startFailed')}: ${e}`);
         } finally {
           await reload();
         }
       })();
     } else if (action === 'archive') {
       void (async () => {
-        await patchIssue(id, { status: 'archived' });
+        await patchTaskPool(id, { status: 'archived' });
         await reload();
       })();
     } else if (action === 'delete') {
-      if (!confirm(t('issues.deleteConfirm'))) return;
+      if (!confirm(t('task_pool.deleteConfirm'))) return;
       void (async () => {
-        const r = await fetch(`/api/issues/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const r = await fetch(`/api/task_pool/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (!r.ok && r.status !== 401) {
           const body = await r.json().catch(() => ({}));
-          alert(`${t('issues.deleteFailed')}: ${body?.error ?? r.status}`);
+          alert(`${t('task_pool.deleteFailed')}: ${body?.error ?? r.status}`);
         }
         await reload();
       })();
@@ -843,15 +843,15 @@ export function wireIssuesPage(root: HTMLElement): () => void {
   list.addEventListener('change', ev => {
     const select = (ev.target as HTMLElement).closest<HTMLSelectElement>('select[data-action]');
     if (!select) return;
-    const card = select.closest<HTMLElement>('.issue-card');
+    const card = select.closest<HTMLElement>('.task_pool-card');
     const id = card?.dataset.id ?? '';
-    if (!issues.some(x => x.id === id)) return;
+    if (!taskPools.some(x => x.id === id)) return;
     const action = select.dataset.action;
     const value = select.value;
     select.disabled = true;
     void (async () => {
-      if (action === 'status') await patchIssue(id, { status: value as IssueStatus });
-      else if (action === 'priority') await patchIssue(id, { priority: value as IssuePriority });
+      if (action === 'status') await patchTaskPool(id, { status: value as TaskPoolStatus });
+      else if (action === 'priority') await patchTaskPool(id, { priority: value as TaskPoolPriority });
       await reload();
     })();
   });
@@ -859,26 +859,26 @@ export function wireIssuesPage(root: HTMLElement): () => void {
   list.addEventListener('focusout', ev => {
     const textarea = (ev.target as HTMLElement).closest<HTMLTextAreaElement>('textarea[data-action=prompt]');
     if (!textarea) return;
-    const card = textarea.closest<HTMLElement>('.issue-card');
+    const card = textarea.closest<HTMLElement>('.task_pool-card');
     const id = card?.dataset.id ?? '';
-    const issue = issues.find(x => x.id === id);
-    if (!issue) return;
+    const taskPool = taskPools.find(x => x.id === id);
+    if (!taskPool) return;
     const prompt = textarea.value.trim();
     if (!prompt) {
-      alert(t('issues.errPrompt'));
-      textarea.value = issue.prompt;
+      alert(t('task_pool.errPrompt'));
+      textarea.value = taskPool.prompt;
       return;
     }
-    if (prompt === issue.prompt) return;
+    if (prompt === taskPool.prompt) return;
     textarea.disabled = true;
     void (async () => {
-      const saved = await patchIssue(id, { prompt });
+      const saved = await patchTaskPool(id, { prompt });
       if (saved) await reload();
       else textarea.disabled = false;
     })();
   });
 
-  list.innerHTML = `<div class="empty">${escapeHtml(t('issues.loading'))}</div>`;
+  list.innerHTML = `<div class="empty">${escapeHtml(t('task_pool.loading'))}</div>`;
   void reload();
   return () => {
     disposed = true;

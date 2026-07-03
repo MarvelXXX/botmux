@@ -243,11 +243,6 @@ async function route() {
   const seq = beginDashboardRoute(routeState);
   const hash = location.hash || '#/';
 
-  if (hash === '#/issues' || hash.startsWith('#/issues/')) {
-    window.location.replace(`#/task_pool${hash.slice('#/issues'.length)}`);
-    return;
-  }
-
   // Read-only hard-guard: a tokenless visitor hitting a management route gets a
   // friendly notice instead of a page that fires a 401 (which used to pop a
   // stuck "link expired" overlay).

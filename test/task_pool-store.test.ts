@@ -3,12 +3,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  createIssue,
-  getIssue,
-  listIssues,
-  readIssueStore,
-  recordIssueStart,
-  updateIssue,
+  createTaskPool,
+  getTaskPool,
+  listTaskPools,
+  readTaskPoolStore,
+  recordTaskPoolStart,
+  updateTaskPool,
 } from '../src/services/task_pool-store.js';
 
 let dirs: string[] = [];
@@ -27,31 +27,31 @@ afterEach(() => {
 describe('task_pool-store', () => {
   it('creates, updates, and records start results', () => {
     const dataDir = tempDataDir();
-    const issue = createIssue({
+    const task_pool = createTaskPool({
       title: '',
-      prompt: 'Fix dashboard issue\n\nDetails',
+      prompt: 'Fix dashboard task_pool\n\nDetails',
       larkAppIds: ['bot_a', 'bot_b', 'bot_a'],
       mode: 'lead',
       column: 'in_progress',
       leadLarkAppId: 'bot_a',
-      groupName: 'Dashboard Issue',
+      groupName: 'Dashboard TaskPool',
     }, dataDir);
 
-    expect(issue.title).toBe('Fix dashboard issue');
-    expect(issue.status).toBe('draft');
-    expect(issue.priority).toBe('P2');
-    expect(issue.larkAppIds).toEqual(['bot_a', 'bot_b']);
+    expect(task_pool.title).toBe('Fix dashboard task_pool');
+    expect(task_pool.status).toBe('draft');
+    expect(task_pool.priority).toBe('P2');
+    expect(task_pool.larkAppIds).toEqual(['bot_a', 'bot_b']);
 
-    const updated = updateIssue(issue.id, {
-      title: 'Dashboard issue',
+    const updated = updateTaskPool(task_pool.id, {
+      title: 'Dashboard task_pool',
       priority: 'P0',
       bindWorkingDir: '/repo/botmux',
     }, dataDir);
-    expect(updated?.title).toBe('Dashboard issue');
+    expect(updated?.title).toBe('Dashboard task_pool');
     expect(updated?.priority).toBe('P0');
     expect(updated?.bindWorkingDir).toBe('/repo/botmux');
 
-    const started = recordIssueStart(issue.id, {
+    const started = recordTaskPoolStart(task_pool.id, {
       status: 'in_progress',
       chatId: 'oc_123',
       shareLink: 'https://example.test/chat',
@@ -61,17 +61,17 @@ describe('task_pool-store', () => {
     expect(started?.chatId).toBe('oc_123');
     expect(started?.spawned).toEqual(['bot_a']);
     expect(started?.failed).toEqual([{ larkAppId: 'bot_b', error: 'offline' }]);
-    expect(getIssue(issue.id, dataDir)?.status).toBe('in_progress');
-    expect(listIssues(dataDir)).toHaveLength(1);
+    expect(getTaskPool(task_pool.id, dataDir)?.status).toBe('in_progress');
+    expect(listTaskPools(dataDir)).toHaveLength(1);
   });
 
   it('normalizes legacy statuses and missing priorities', () => {
     const dataDir = tempDataDir();
-    writeFileSync(join(dataDir, 'issues.json'), JSON.stringify({
+    writeFileSync(join(dataDir, 'task_pool.json'), JSON.stringify({
       version: 1,
-      issues: [
+      taskPools: [
         {
-          id: 'iss_active',
+          id: 'tp_active',
           title: 'Active legacy',
           prompt: 'legacy active',
           larkAppIds: ['bot_a'],
@@ -83,7 +83,7 @@ describe('task_pool-store', () => {
           updatedAt: '2026-01-01T00:00:00.000Z',
         },
         {
-          id: 'iss_failed',
+          id: 'tp_failed',
           title: 'Failed legacy',
           prompt: 'legacy failed',
           larkAppIds: ['bot_b'],
@@ -98,31 +98,31 @@ describe('task_pool-store', () => {
       ],
     }));
 
-    expect(getIssue('iss_active', dataDir)?.status).toBe('in_progress');
-    expect(getIssue('iss_active', dataDir)?.priority).toBe('P2');
-    expect(getIssue('iss_failed', dataDir)?.status).toBe('pending');
-    expect(getIssue('iss_failed', dataDir)?.priority).toBe('P1');
+    expect(getTaskPool('tp_active', dataDir)?.status).toBe('in_progress');
+    expect(getTaskPool('tp_active', dataDir)?.priority).toBe('P2');
+    expect(getTaskPool('tp_failed', dataDir)?.status).toBe('pending');
+    expect(getTaskPool('tp_failed', dataDir)?.priority).toBe('P1');
   });
 
-  it('returns defensive copies when serving cached issues', () => {
+  it('returns defensive copies when serving cached taskPools', () => {
     const dataDir = tempDataDir();
-    const issue = createIssue({
-      title: 'Cached issue',
+    const task_pool = createTaskPool({
+      title: 'Cached task_pool',
       prompt: 'keep cache immutable',
       larkAppIds: ['bot_a'],
       mode: 'lead',
       column: 'in_progress',
     }, dataDir);
 
-    const listed = listIssues(dataDir);
+    const listed = listTaskPools(dataDir);
     listed[0].title = 'mutated list';
     listed[0].larkAppIds.push('bot_b');
 
-    const store = readIssueStore(dataDir);
-    store.issues[0].title = 'mutated store';
-    store.issues[0].larkAppIds.push('bot_c');
+    const store = readTaskPoolStore(dataDir);
+    store.taskPools[0].title = 'mutated store';
+    store.taskPools[0].larkAppIds.push('bot_c');
 
-    expect(getIssue(issue.id, dataDir)?.title).toBe('Cached issue');
-    expect(getIssue(issue.id, dataDir)?.larkAppIds).toEqual(['bot_a']);
+    expect(getTaskPool(task_pool.id, dataDir)?.title).toBe('Cached task_pool');
+    expect(getTaskPool(task_pool.id, dataDir)?.larkAppIds).toEqual(['bot_a']);
   });
 });

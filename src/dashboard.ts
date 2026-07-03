@@ -77,19 +77,19 @@ import {
 import { createDaemonInternalApi } from './dashboard/daemon-internal-api.js';
 import { listTeamReports, readTeamBoard, setTeamBoardEntry } from './services/team-board-store.js';
 import {
-  createIssue,
-  defaultIssueTitle,
-  deleteIssue,
-  getIssue,
-  listIssues,
-  recordIssueStart,
-  updateIssue,
-  type DashboardIssueColumn,
-  type DashboardIssueCreateInput,
-  type DashboardIssueMode,
-  type DashboardIssuePriority,
-  type DashboardIssueStatus,
-  type DashboardIssueUpdatePatch,
+  createTaskPool,
+  defaultTaskPoolTitle,
+  deleteTaskPool,
+  getTaskPool,
+  listTaskPools,
+  recordTaskPoolStart,
+  updateTaskPool,
+  type DashboardTaskPoolColumn,
+  type DashboardTaskPoolCreateInput,
+  type DashboardTaskPoolMode,
+  type DashboardTaskPoolPriority,
+  type DashboardTaskPoolStatus,
+  type DashboardTaskPoolUpdatePatch,
 } from './services/task_pool-store.js';
 import type { CliId } from './adapters/cli/types.js';
 import type { ConnectorDefinition } from './services/connector-store.js';
@@ -149,7 +149,7 @@ function loadOrCreateSecret(): string {
   }
 }
 
-// The active dashboard token is persisted to disk so a previously-issued
+// The active dashboard token is persisted to disk so a previously-minted
 // dashboard URL survives `botmux restart`; only `botmux dashboard` (the
 // /__cli/rotate endpoint) rotates it and thereby invalidates the old link.
 // The start/restart hint reads it via the non-rotating /__cli/current endpoint
@@ -731,19 +731,19 @@ async function createDashboardSession(parsed: DashboardSessionCreateRequest): Pr
   };
 }
 
-function parseIssueMode(value: unknown): DashboardIssueMode {
+function parseTaskPoolMode(value: unknown): DashboardTaskPoolMode {
   return value === 'all' ? 'all' : 'lead';
 }
 
-function parseIssueColumn(value: unknown): DashboardIssueColumn {
+function parseTaskPoolColumn(value: unknown): DashboardTaskPoolColumn {
   return value === 'backlog' ? 'backlog' : 'in_progress';
 }
 
-function parseIssuePriority(value: unknown): DashboardIssuePriority {
+function parseTaskPoolPriority(value: unknown): DashboardTaskPoolPriority {
   return value === 'P0' || value === 'P1' || value === 'P2' || value === 'P3' ? value : 'P2';
 }
 
-function parseIssueStatus(value: unknown): DashboardIssueStatus | null {
+function parseTaskPoolStatus(value: unknown): DashboardTaskPoolStatus | null {
   return (
     value === 'draft' ||
     value === 'pending' ||
@@ -753,7 +753,7 @@ function parseIssueStatus(value: unknown): DashboardIssueStatus | null {
   ) ? value : null;
 }
 
-function parseIssueCreateBody(raw: unknown): { ok: true; input: DashboardIssueCreateInput } | { ok: false; error: string } {
+function parseTaskPoolCreateBody(raw: unknown): { ok: true; input: DashboardTaskPoolCreateInput } | { ok: false; error: string } {
   const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   if (!prompt) return { ok: false, error: 'prompt_required' };
@@ -761,14 +761,14 @@ function parseIssueCreateBody(raw: unknown): { ok: true; input: DashboardIssueCr
     ? Array.from(new Set(body.larkAppIds.filter((x): x is string => typeof x === 'string').map(x => x.trim()).filter(Boolean)))
     : [];
   if (larkAppIds.length === 0) return { ok: false, error: 'larkAppIds_required' };
-  const mode = parseIssueMode(body.mode);
+  const mode = parseTaskPoolMode(body.mode);
   const leadLarkAppId = typeof body.leadLarkAppId === 'string' ? body.leadLarkAppId.trim() : '';
   if (mode === 'lead' && (!leadLarkAppId || !larkAppIds.includes(leadLarkAppId))) {
     return { ok: false, error: 'bad_lead' };
   }
   const title = typeof body.title === 'string' && body.title.trim()
     ? body.title.trim().slice(0, 120)
-    : defaultIssueTitle(prompt);
+    : defaultTaskPoolTitle(prompt);
   return {
     ok: true,
     input: {
@@ -776,8 +776,8 @@ function parseIssueCreateBody(raw: unknown): { ok: true; input: DashboardIssueCr
       prompt,
       larkAppIds,
       mode,
-      column: parseIssueColumn(body.column),
-      priority: parseIssuePriority(body.priority),
+      column: parseTaskPoolColumn(body.column),
+      priority: parseTaskPoolPriority(body.priority),
       leadLarkAppId: mode === 'lead' ? leadLarkAppId : undefined,
       groupName: typeof body.groupName === 'string' ? body.groupName.trim() : undefined,
       bindWorkingDir: typeof body.bindWorkingDir === 'string' ? body.bindWorkingDir.trim() : undefined,
@@ -785,10 +785,10 @@ function parseIssueCreateBody(raw: unknown): { ok: true; input: DashboardIssueCr
   };
 }
 
-function parseIssueUpdateBody(raw: unknown): { ok: true; patch: DashboardIssueUpdatePatch } | { ok: false; error: string } {
+function parseTaskPoolUpdateBody(raw: unknown): { ok: true; patch: DashboardTaskPoolUpdatePatch } | { ok: false; error: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'bad_json' };
   const body = raw as Record<string, unknown>;
-  const patch: DashboardIssueUpdatePatch = {};
+  const patch: DashboardTaskPoolUpdatePatch = {};
   if ('title' in body && typeof body.title === 'string') patch.title = body.title;
   if ('prompt' in body) {
     if (typeof body.prompt !== 'string' || !body.prompt.trim()) return { ok: false, error: 'prompt_required' };
@@ -817,7 +817,7 @@ function parseIssueUpdateBody(raw: unknown): { ok: true; patch: DashboardIssueUp
   if ('groupName' in body && typeof body.groupName === 'string') patch.groupName = body.groupName;
   if ('bindWorkingDir' in body && typeof body.bindWorkingDir === 'string') patch.bindWorkingDir = body.bindWorkingDir;
   if ('status' in body) {
-    const status = parseIssueStatus(body.status);
+    const status = parseTaskPoolStatus(body.status);
     if (!status) return { ok: false, error: 'bad_status' };
     patch.status = status;
   }
@@ -1279,7 +1279,7 @@ const server = createServer(async (req, res) => {
     }
 
     // CLI rotate (HMAC + loopback only) — for `botmux dashboard`. Mints a fresh
-    // token, invalidating any previously-issued link.
+    // token, invalidating any previously-minted link.
     if (req.method === 'POST' && url.pathname === '/__cli/rotate') {
       const gate = verifyCliRequest(req, url.pathname);
       if (!gate.ok) return jsonRes(res, gate.status, gate.body);
@@ -1293,7 +1293,7 @@ const server = createServer(async (req, res) => {
     }
 
     // CLI read current URL (HMAC + loopback only) — for the start/restart hint.
-    // Unlike /__cli/rotate this does NOT mint a token, so an already-issued
+    // Unlike /__cli/rotate this does NOT mint a token, so an already-minted
     // dashboard link survives restart untouched. 404 → no token has ever been
     // minted (caller falls back to suggesting `botmux dashboard`).
     if (req.method === 'POST' && url.pathname === '/__cli/current') {
@@ -2656,30 +2656,30 @@ const server = createServer(async (req, res) => {
       return jsonRes(res, result.status, result.body);
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/issues') {
-      return jsonRes(res, 200, { issues: listIssues() });
+    if (req.method === 'GET' && url.pathname === '/api/task_pool') {
+      return jsonRes(res, 200, { taskPools: listTaskPools() });
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/issues') {
+    if (req.method === 'POST' && url.pathname === '/api/task_pool') {
       let parsed: unknown;
       try {
         parsed = await readJsonBody(req);
       } catch {
         return jsonRes(res, 400, { ok: false, error: 'bad_json' });
       }
-      const input = parseIssueCreateBody(parsed);
+      const input = parseTaskPoolCreateBody(parsed);
       if (!input.ok) return jsonRes(res, 400, { ok: false, error: input.error });
-      const issue = createIssue(input.input);
-      return jsonRes(res, 201, { ok: true, issue });
+      const taskPool = createTaskPool(input.input);
+      return jsonRes(res, 201, { ok: true, taskPool });
     }
 
-    let mIssue: RegExpMatchArray | null;
-    if ((mIssue = url.pathname.match(/^\/api\/issues\/([^/]+)$/))) {
-      const issueId = decodeURIComponent(mIssue[1]);
+    let mTaskPool: RegExpMatchArray | null;
+    if ((mTaskPool = url.pathname.match(/^\/api\/task_pool\/([^/]+)$/))) {
+      const taskPoolId = decodeURIComponent(mTaskPool[1]);
       if (req.method === 'GET') {
-        const issue = getIssue(issueId);
-        if (!issue) return jsonRes(res, 404, { ok: false, error: 'issue_not_found' });
-        return jsonRes(res, 200, { ok: true, issue });
+        const taskPool = getTaskPool(taskPoolId);
+        if (!taskPool) return jsonRes(res, 404, { ok: false, error: 'task_pool_not_found' });
+        return jsonRes(res, 200, { ok: true, taskPool });
       }
       if (req.method === 'PUT') {
         let parsed: unknown;
@@ -2688,34 +2688,34 @@ const server = createServer(async (req, res) => {
         } catch {
           return jsonRes(res, 400, { ok: false, error: 'bad_json' });
         }
-        const patch = parseIssueUpdateBody(parsed);
+        const patch = parseTaskPoolUpdateBody(parsed);
         if (!patch.ok) return jsonRes(res, 400, { ok: false, error: patch.error });
-        const issue = updateIssue(issueId, patch.patch);
-        if (!issue) return jsonRes(res, 404, { ok: false, error: 'issue_not_found' });
-        return jsonRes(res, 200, { ok: true, issue });
+        const taskPool = updateTaskPool(taskPoolId, patch.patch);
+        if (!taskPool) return jsonRes(res, 404, { ok: false, error: 'task_pool_not_found' });
+        return jsonRes(res, 200, { ok: true, taskPool });
       }
       if (req.method === 'DELETE') {
-        const deleted = deleteIssue(issueId);
-        if (!deleted) return jsonRes(res, 404, { ok: false, error: 'issue_not_found' });
+        const deleted = deleteTaskPool(taskPoolId);
+        if (!deleted) return jsonRes(res, 404, { ok: false, error: 'task_pool_not_found' });
         return jsonRes(res, 200, { ok: true });
       }
     }
 
-    if (req.method === 'POST' && (mIssue = url.pathname.match(/^\/api\/issues\/([^/]+)\/start$/))) {
-      const issueId = decodeURIComponent(mIssue[1]);
-      const issue = getIssue(issueId);
-      if (!issue) return jsonRes(res, 404, { ok: false, error: 'issue_not_found' });
-      if (issue.status === 'in_progress' && issue.chatId) {
-        return jsonRes(res, 409, { ok: false, error: 'issue_already_started', issue });
+    if (req.method === 'POST' && (mTaskPool = url.pathname.match(/^\/api\/task_pool\/([^/]+)\/start$/))) {
+      const taskPoolId = decodeURIComponent(mTaskPool[1]);
+      const taskPool = getTaskPool(taskPoolId);
+      if (!taskPool) return jsonRes(res, 404, { ok: false, error: 'task_pool_not_found' });
+      if (taskPool.status === 'in_progress' && taskPool.chatId) {
+        return jsonRes(res, 409, { ok: false, error: 'task_pool_already_started', taskPool });
       }
       const result = await createDashboardSession({
-        content: issue.prompt,
-        larkAppIds: issue.larkAppIds,
-        mode: issue.mode,
-        column: issue.column,
-        leadLarkAppId: issue.leadLarkAppId,
-        name: issue.groupName || issue.title,
-        bindWorkingDir: issue.bindWorkingDir,
+        content: taskPool.prompt,
+        larkAppIds: taskPool.larkAppIds,
+        mode: taskPool.mode,
+        column: taskPool.column,
+        leadLarkAppId: taskPool.leadLarkAppId,
+        name: taskPool.groupName || taskPool.title,
+        bindWorkingDir: taskPool.bindWorkingDir,
       });
       const body = result.body as {
         ok?: unknown;
@@ -2726,7 +2726,7 @@ const server = createServer(async (req, res) => {
         failed?: unknown;
       };
       const started = body.ok === true;
-      const updated = recordIssueStart(issueId, {
+      const updated = recordTaskPoolStart(taskPoolId, {
         status: started ? 'in_progress' : 'pending',
         chatId: typeof body.chatId === 'string' ? body.chatId : undefined,
         shareLink: typeof body.shareLink === 'string' ? body.shareLink : undefined,
@@ -2736,7 +2736,7 @@ const server = createServer(async (req, res) => {
             !!x && typeof x === 'object' && typeof x.larkAppId === 'string' && typeof x.error === 'string')
           : (started ? [] : [{ larkAppId: 'dashboard', error: String(body.error ?? 'start_failed') }]),
       });
-      return jsonRes(res, result.status, { ...result.body, issue: updated ?? issue });
+      return jsonRes(res, result.status, { ...result.body, taskPool: updated ?? taskPool });
     }
 
     // Public SSE — relays aggregator's listener events

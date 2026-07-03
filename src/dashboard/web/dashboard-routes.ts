@@ -35,7 +35,7 @@ export const dashboardRoutes: DashboardRoute[] = [
     rerenderOnUiChange: true,
     load: async () => {
       const mod = await import('./task_pool-page.js');
-      return root => mod.renderIssuesPage(root);
+      return root => mod.renderTaskPoolPage(root);
     },
   },
   {

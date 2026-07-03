@@ -4,68 +4,68 @@ import { randomUUID } from 'node:crypto';
 import { atomicWriteFileSync } from '../utils/atomic-write.js';
 import { config } from '../config.js';
 
-export type DashboardIssueStatus = 'draft' | 'pending' | 'in_progress' | 'done' | 'archived';
-export type DashboardIssuePriority = 'P0' | 'P1' | 'P2' | 'P3';
-export type DashboardIssueMode = 'lead' | 'all';
-export type DashboardIssueColumn = 'in_progress' | 'backlog';
+export type DashboardTaskPoolStatus = 'draft' | 'pending' | 'in_progress' | 'done' | 'archived';
+export type DashboardTaskPoolPriority = 'P0' | 'P1' | 'P2' | 'P3';
+export type DashboardTaskPoolMode = 'lead' | 'all';
+export type DashboardTaskPoolColumn = 'in_progress' | 'backlog';
 
-export interface DashboardIssueStartFailure {
+export interface DashboardTaskPoolStartFailure {
   larkAppId: string;
   error: string;
 }
 
-export interface DashboardIssue {
+export interface DashboardTaskPool {
   id: string;
   title: string;
   prompt: string;
   larkAppIds: string[];
-  mode: DashboardIssueMode;
-  column: DashboardIssueColumn;
+  mode: DashboardTaskPoolMode;
+  column: DashboardTaskPoolColumn;
   leadLarkAppId?: string;
   groupName?: string;
   bindWorkingDir?: string;
-  status: DashboardIssueStatus;
-  priority: DashboardIssuePriority;
+  status: DashboardTaskPoolStatus;
+  priority: DashboardTaskPoolPriority;
   chatId?: string;
   shareLink?: string;
   spawned?: string[];
-  failed?: DashboardIssueStartFailure[];
+  failed?: DashboardTaskPoolStartFailure[];
   createdAt: string;
   updatedAt: string;
   startedAt?: string;
   closedAt?: string;
 }
 
-export interface DashboardIssueStoreFile {
+export interface DashboardTaskPoolStoreFile {
   version: 1;
-  issues: DashboardIssue[];
+  taskPools: DashboardTaskPool[];
 }
 
-export type DashboardIssueCreateInput = Pick<
-  DashboardIssue,
+export type DashboardTaskPoolCreateInput = Pick<
+  DashboardTaskPool,
   'title' | 'prompt' | 'larkAppIds' | 'mode' | 'column'
-> & Pick<Partial<DashboardIssue>, 'priority' | 'leadLarkAppId' | 'groupName' | 'bindWorkingDir'>;
+> & Pick<Partial<DashboardTaskPool>, 'priority' | 'leadLarkAppId' | 'groupName' | 'bindWorkingDir'>;
 
-export type DashboardIssueUpdatePatch = Partial<Pick<
-  DashboardIssue,
+export type DashboardTaskPoolUpdatePatch = Partial<Pick<
+  DashboardTaskPool,
   'title' | 'prompt' | 'larkAppIds' | 'mode' | 'column' | 'priority' | 'leadLarkAppId' | 'groupName' | 'bindWorkingDir' | 'status'
 >>;
 
-interface IssueStoreCacheEntry {
+interface TaskPoolStoreCacheEntry {
   mtimeMs: number;
   ctimeMs: number;
   size: number;
-  store: DashboardIssueStoreFile;
+  store: DashboardTaskPoolStoreFile;
 }
 
-const issueStoreCache = new Map<string, IssueStoreCacheEntry>();
+const taskPoolStoreCache = new Map<string, TaskPoolStoreCacheEntry>();
 
 function storePath(dataDir: string = config.session.dataDir): string {
-  return join(dataDir, 'issues.json');
+  return join(dataDir, 'task_pool.json');
 }
 
-function emptyStore(): DashboardIssueStoreFile {
-  return { version: 1, issues: [] };
+function emptyStore(): DashboardTaskPoolStoreFile {
+  return { version: 1, taskPools: [] };
 }
 
 function normalizeString(value: unknown, max: number): string {
@@ -82,7 +82,7 @@ function normalizeStringArray(value: unknown, maxItem: number): string[] {
   ));
 }
 
-function normalizeFailure(value: unknown): DashboardIssueStartFailure | null {
+function normalizeFailure(value: unknown): DashboardTaskPoolStartFailure | null {
   if (!value || typeof value !== 'object') return null;
   const row = value as Record<string, unknown>;
   const larkAppId = normalizeString(row.larkAppId, 128);
@@ -93,7 +93,7 @@ function normalizeFailure(value: unknown): DashboardIssueStartFailure | null {
   };
 }
 
-function normalizeStatus(value: unknown): DashboardIssueStatus {
+function normalizeStatus(value: unknown): DashboardTaskPoolStatus {
   if (value === 'draft' || value === 'pending' || value === 'in_progress' || value === 'done' || value === 'archived') {
     return value;
   }
@@ -103,23 +103,23 @@ function normalizeStatus(value: unknown): DashboardIssueStatus {
   return 'draft';
 }
 
-function normalizePriority(value: unknown): DashboardIssuePriority {
+function normalizePriority(value: unknown): DashboardTaskPoolPriority {
   return value === 'P0' || value === 'P1' || value === 'P2' || value === 'P3' ? value : 'P2';
 }
 
-function normalizeIssue(raw: unknown): DashboardIssue | null {
+function normalizeTaskPool(raw: unknown): DashboardTaskPool | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const r = raw as Partial<DashboardIssue>;
+  const r = raw as Partial<DashboardTaskPool>;
   const id = normalizeString(r.id, 80);
   const prompt = normalizeString(r.prompt, 40_000);
   const larkAppIds = normalizeStringArray(r.larkAppIds, 128);
   if (!id || !prompt || larkAppIds.length === 0) return null;
-  const title = normalizeString(r.title, 120) || defaultIssueTitle(prompt);
-  const mode: DashboardIssueMode = r.mode === 'all' ? 'all' : 'lead';
-  const column: DashboardIssueColumn = r.column === 'backlog' ? 'backlog' : 'in_progress';
+  const title = normalizeString(r.title, 120) || defaultTaskPoolTitle(prompt);
+  const mode: DashboardTaskPoolMode = r.mode === 'all' ? 'all' : 'lead';
+  const column: DashboardTaskPoolColumn = r.column === 'backlog' ? 'backlog' : 'in_progress';
   const createdAt = normalizeString(r.createdAt, 64) || new Date().toISOString();
   const updatedAt = normalizeString(r.updatedAt, 64) || createdAt;
-  const issue: DashboardIssue = {
+  const taskPool: DashboardTaskPool = {
     id,
     title,
     prompt,
@@ -132,118 +132,118 @@ function normalizeIssue(raw: unknown): DashboardIssue | null {
     updatedAt,
   };
   const lead = normalizeString(r.leadLarkAppId, 128);
-  if (lead && larkAppIds.includes(lead)) issue.leadLarkAppId = lead;
+  if (lead && larkAppIds.includes(lead)) taskPool.leadLarkAppId = lead;
   const groupName = normalizeString(r.groupName, 60);
-  if (groupName) issue.groupName = groupName;
+  if (groupName) taskPool.groupName = groupName;
   const bindWorkingDir = normalizeString(r.bindWorkingDir, 500);
-  if (bindWorkingDir) issue.bindWorkingDir = bindWorkingDir;
+  if (bindWorkingDir) taskPool.bindWorkingDir = bindWorkingDir;
   const chatId = normalizeString(r.chatId, 128);
-  if (chatId) issue.chatId = chatId;
+  if (chatId) taskPool.chatId = chatId;
   const shareLink = normalizeString(r.shareLink, 1000);
-  if (shareLink) issue.shareLink = shareLink;
+  if (shareLink) taskPool.shareLink = shareLink;
   const spawned = normalizeStringArray(r.spawned, 128);
-  if (spawned.length > 0) issue.spawned = spawned;
+  if (spawned.length > 0) taskPool.spawned = spawned;
   const failed = Array.isArray(r.failed)
-    ? r.failed.map(normalizeFailure).filter((x): x is DashboardIssueStartFailure => !!x)
+    ? r.failed.map(normalizeFailure).filter((x): x is DashboardTaskPoolStartFailure => !!x)
     : [];
-  if (failed.length > 0) issue.failed = failed;
+  if (failed.length > 0) taskPool.failed = failed;
   const startedAt = normalizeString(r.startedAt, 64);
-  if (startedAt) issue.startedAt = startedAt;
+  if (startedAt) taskPool.startedAt = startedAt;
   const closedAt = normalizeString(r.closedAt, 64);
-  if (closedAt) issue.closedAt = closedAt;
-  return issue;
+  if (closedAt) taskPool.closedAt = closedAt;
+  return taskPool;
 }
 
-function normalizeStore(raw: unknown): DashboardIssueStoreFile {
+function normalizeStore(raw: unknown): DashboardTaskPoolStoreFile {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptyStore();
-  const r = raw as Partial<DashboardIssueStoreFile>;
+  const r = raw as Partial<DashboardTaskPoolStoreFile>;
   return {
     version: 1,
-    issues: Array.isArray(r.issues)
-      ? r.issues.map(normalizeIssue).filter((x): x is DashboardIssue => !!x)
+    taskPools: Array.isArray(r.taskPools)
+      ? r.taskPools.map(normalizeTaskPool).filter((x): x is DashboardTaskPool => !!x)
       : [],
   };
 }
 
-function cloneIssue(issue: DashboardIssue): DashboardIssue {
+function cloneTaskPool(taskPool: DashboardTaskPool): DashboardTaskPool {
   return {
-    ...issue,
-    larkAppIds: [...issue.larkAppIds],
-    spawned: issue.spawned ? [...issue.spawned] : undefined,
-    failed: issue.failed ? issue.failed.map(row => ({ ...row })) : undefined,
+    ...taskPool,
+    larkAppIds: [...taskPool.larkAppIds],
+    spawned: taskPool.spawned ? [...taskPool.spawned] : undefined,
+    failed: taskPool.failed ? taskPool.failed.map(row => ({ ...row })) : undefined,
   };
 }
 
-function cloneStore(store: DashboardIssueStoreFile): DashboardIssueStoreFile {
+function cloneStore(store: DashboardTaskPoolStoreFile): DashboardTaskPoolStoreFile {
   return {
     version: 1,
-    issues: store.issues.map(cloneIssue),
+    taskPools: store.taskPools.map(cloneTaskPool),
   };
 }
 
-export function defaultIssueTitle(prompt: string): string {
-  const firstLine = prompt.split(/\r?\n/u).map(s => s.trim()).find(Boolean) ?? 'Untitled issue';
+export function defaultTaskPoolTitle(prompt: string): string {
+  const firstLine = prompt.split(/\r?\n/u).map(s => s.trim()).find(Boolean) ?? 'Untitled task_pool';
   return firstLine.length <= 80 ? firstLine : `${firstLine.slice(0, 77)}...`;
 }
 
-function readCachedIssueStore(dataDir: string = config.session.dataDir): DashboardIssueStoreFile {
+function readCachedTaskPoolStore(dataDir: string = config.session.dataDir): DashboardTaskPoolStoreFile {
   const fp = storePath(dataDir);
   let st;
   try {
     st = statSync(fp);
   } catch {
-    issueStoreCache.delete(fp);
+    taskPoolStoreCache.delete(fp);
     return emptyStore();
   }
-  const cached = issueStoreCache.get(fp);
+  const cached = taskPoolStoreCache.get(fp);
   if (cached && cached.mtimeMs === st.mtimeMs && cached.ctimeMs === st.ctimeMs && cached.size === st.size) {
     return cached.store;
   }
   try {
     const store = normalizeStore(JSON.parse(readFileSync(fp, 'utf-8')));
-    issueStoreCache.set(fp, { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, store });
+    taskPoolStoreCache.set(fp, { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, store });
     return store;
   } catch {
-    issueStoreCache.delete(fp);
+    taskPoolStoreCache.delete(fp);
     return emptyStore();
   }
 }
 
-export function readIssueStore(dataDir: string = config.session.dataDir): DashboardIssueStoreFile {
-  return cloneStore(readCachedIssueStore(dataDir));
+export function readTaskPoolStore(dataDir: string = config.session.dataDir): DashboardTaskPoolStoreFile {
+  return cloneStore(readCachedTaskPoolStore(dataDir));
 }
 
-function writeIssueStore(dataDir: string, store: DashboardIssueStoreFile): void {
+function writeTaskPoolStore(dataDir: string, store: DashboardTaskPoolStoreFile): void {
   const fp = storePath(dataDir);
   const normalized = normalizeStore(store);
   mkdirSync(dirname(fp), { recursive: true });
   atomicWriteFileSync(fp, JSON.stringify(normalized, null, 2) + '\n', { mode: 0o600 });
   try {
     const st = statSync(fp);
-    issueStoreCache.set(fp, { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, store: normalized });
+    taskPoolStoreCache.set(fp, { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, store: normalized });
   } catch {
-    issueStoreCache.delete(fp);
+    taskPoolStoreCache.delete(fp);
   }
 }
 
-export function listIssues(dataDir: string = config.session.dataDir): DashboardIssue[] {
-  return readCachedIssueStore(dataDir).issues
+export function listTaskPools(dataDir: string = config.session.dataDir): DashboardTaskPool[] {
+  return readCachedTaskPoolStore(dataDir).taskPools
     .slice()
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .map(cloneIssue);
+    .map(cloneTaskPool);
 }
 
-export function getIssue(id: string, dataDir: string = config.session.dataDir): DashboardIssue | null {
-  const issue = readCachedIssueStore(dataDir).issues.find(row => row.id === id);
-  return issue ? cloneIssue(issue) : null;
+export function getTaskPool(id: string, dataDir: string = config.session.dataDir): DashboardTaskPool | null {
+  const taskPool = readCachedTaskPoolStore(dataDir).taskPools.find(row => row.id === id);
+  return taskPool ? cloneTaskPool(taskPool) : null;
 }
 
-export function createIssue(input: DashboardIssueCreateInput, dataDir: string = config.session.dataDir): DashboardIssue {
+export function createTaskPool(input: DashboardTaskPoolCreateInput, dataDir: string = config.session.dataDir): DashboardTaskPool {
   const now = new Date().toISOString();
   const prompt = input.prompt.trim();
-  const issue: DashboardIssue = {
-    id: `iss_${randomUUID()}`,
-    title: input.title.trim() || defaultIssueTitle(prompt),
+  const taskPool: DashboardTaskPool = {
+    id: `tp_${randomUUID()}`,
+    title: input.title.trim() || defaultTaskPoolTitle(prompt),
     prompt,
     larkAppIds: Array.from(new Set(input.larkAppIds.map(id => id.trim()).filter(Boolean))),
     mode: input.mode,
@@ -253,32 +253,32 @@ export function createIssue(input: DashboardIssueCreateInput, dataDir: string = 
     createdAt: now,
     updatedAt: now,
   };
-  if (input.leadLarkAppId && issue.larkAppIds.includes(input.leadLarkAppId)) issue.leadLarkAppId = input.leadLarkAppId;
-  if (input.groupName?.trim()) issue.groupName = input.groupName.trim().slice(0, 60);
-  if (input.bindWorkingDir?.trim()) issue.bindWorkingDir = input.bindWorkingDir.trim();
-  const store = cloneStore(readCachedIssueStore(dataDir));
-  store.issues.push(issue);
-  writeIssueStore(dataDir, store);
-  return cloneIssue(issue);
+  if (input.leadLarkAppId && taskPool.larkAppIds.includes(input.leadLarkAppId)) taskPool.leadLarkAppId = input.leadLarkAppId;
+  if (input.groupName?.trim()) taskPool.groupName = input.groupName.trim().slice(0, 60);
+  if (input.bindWorkingDir?.trim()) taskPool.bindWorkingDir = input.bindWorkingDir.trim();
+  const store = cloneStore(readCachedTaskPoolStore(dataDir));
+  store.taskPools.push(taskPool);
+  writeTaskPoolStore(dataDir, store);
+  return cloneTaskPool(taskPool);
 }
 
-export function updateIssue(
+export function updateTaskPool(
   id: string,
-  patch: DashboardIssueUpdatePatch,
+  patch: DashboardTaskPoolUpdatePatch,
   dataDir: string = config.session.dataDir,
-): DashboardIssue | null {
-  const store = cloneStore(readCachedIssueStore(dataDir));
-  const idx = store.issues.findIndex(issue => issue.id === id);
+): DashboardTaskPool | null {
+  const store = cloneStore(readCachedTaskPoolStore(dataDir));
+  const idx = store.taskPools.findIndex(taskPool => taskPool.id === id);
   if (idx < 0) return null;
-  const current = store.issues[idx];
-  const next: DashboardIssue = {
+  const current = store.taskPools[idx];
+  const next: DashboardTaskPool = {
     ...current,
     updatedAt: new Date().toISOString(),
   };
-  if (typeof patch.title === 'string') next.title = patch.title.trim().slice(0, 120) || defaultIssueTitle(next.prompt);
+  if (typeof patch.title === 'string') next.title = patch.title.trim().slice(0, 120) || defaultTaskPoolTitle(next.prompt);
   if (typeof patch.prompt === 'string' && patch.prompt.trim()) {
     next.prompt = patch.prompt.trim().slice(0, 40_000);
-    if (!next.title.trim()) next.title = defaultIssueTitle(next.prompt);
+    if (!next.title.trim()) next.title = defaultTaskPoolTitle(next.prompt);
   }
   if (Array.isArray(patch.larkAppIds)) {
     next.larkAppIds = Array.from(new Set(patch.larkAppIds.map(id => String(id).trim()).filter(Boolean)));
@@ -315,28 +315,28 @@ export function updateIssue(
     if (patch.status === 'done' || patch.status === 'archived') next.closedAt = next.updatedAt;
     else delete next.closedAt;
   }
-  store.issues[idx] = next;
-  writeIssueStore(dataDir, store);
-  return cloneIssue(next);
+  store.taskPools[idx] = next;
+  writeTaskPoolStore(dataDir, store);
+  return cloneTaskPool(next);
 }
 
-export function recordIssueStart(
+export function recordTaskPoolStart(
   id: string,
   result: {
     chatId?: string;
     shareLink?: string;
     spawned?: string[];
-    failed?: DashboardIssueStartFailure[];
-    status: Extract<DashboardIssueStatus, 'in_progress' | 'pending'>;
+    failed?: DashboardTaskPoolStartFailure[];
+    status: Extract<DashboardTaskPoolStatus, 'in_progress' | 'pending'>;
   },
   dataDir: string = config.session.dataDir,
-): DashboardIssue | null {
-  const store = cloneStore(readCachedIssueStore(dataDir));
-  const idx = store.issues.findIndex(issue => issue.id === id);
+): DashboardTaskPool | null {
+  const store = cloneStore(readCachedTaskPoolStore(dataDir));
+  const idx = store.taskPools.findIndex(taskPool => taskPool.id === id);
   if (idx < 0) return null;
   const now = new Date().toISOString();
-  const next: DashboardIssue = {
-    ...store.issues[idx],
+  const next: DashboardTaskPool = {
+    ...store.taskPools[idx],
     status: result.status,
     updatedAt: now,
     startedAt: now,
@@ -345,16 +345,16 @@ export function recordIssueStart(
   if (result.shareLink) next.shareLink = result.shareLink;
   next.spawned = result.spawned ?? [];
   next.failed = result.failed ?? [];
-  store.issues[idx] = next;
-  writeIssueStore(dataDir, store);
-  return cloneIssue(next);
+  store.taskPools[idx] = next;
+  writeTaskPoolStore(dataDir, store);
+  return cloneTaskPool(next);
 }
 
-export function deleteIssue(id: string, dataDir: string = config.session.dataDir): boolean {
-  const store = cloneStore(readCachedIssueStore(dataDir));
-  const before = store.issues.length;
-  store.issues = store.issues.filter(issue => issue.id !== id);
-  if (store.issues.length === before) return false;
-  writeIssueStore(dataDir, store);
+export function deleteTaskPool(id: string, dataDir: string = config.session.dataDir): boolean {
+  const store = cloneStore(readCachedTaskPoolStore(dataDir));
+  const before = store.taskPools.length;
+  store.taskPools = store.taskPools.filter(taskPool => taskPool.id !== id);
+  if (store.taskPools.length === before) return false;
+  writeTaskPoolStore(dataDir, store);
   return true;
 }
