@@ -301,6 +301,8 @@ function filtered(form: HTMLFormElement): DashboardTaskPool[] {
 
 function taskPoolCard(taskPool: DashboardTaskPool): string {
   const started = taskPool.status === 'in_progress' && !!taskPool.chatId;
+  const startInFlight = taskPool.status === 'pending' && !!taskPool.startedAt && (taskPool.failed?.length ?? 0) === 0;
+  const startDisabled = started || startInFlight || taskPool.status === 'archived';
   const failedCount = taskPool.failed?.length ?? 0;
   const spawnedCount = taskPool.spawned?.length ?? 0;
   const associatedIds = associatedBotIds(taskPool);
@@ -312,7 +314,7 @@ function taskPoolCard(taskPool: DashboardTaskPool): string {
         <h2>${escapeHtml(taskPool.title)}</h2>
       </div>
       <div class="task_pool-card-actions">
-        <button type="button" data-action="start" ${started ? 'disabled' : ''}>${escapeHtml(t(started ? 'task_pool.started' : 'task_pool.start'))}</button>
+        <button type="button" data-action="start" ${startDisabled ? 'disabled' : ''}>${escapeHtml(t(started ? 'task_pool.started' : startInFlight ? 'task_pool.starting' : 'task_pool.start'))}</button>
         <button type="button" data-action="edit">${escapeHtml(t('task_pool.edit'))}</button>
         <button type="button" data-action="archive" ${taskPool.status === 'archived' ? 'disabled' : ''}>${escapeHtml(t('task_pool.archive'))}</button>
         <button type="button" data-action="delete" class="contrast">${escapeHtml(t('task_pool.delete'))}</button>
@@ -462,7 +464,10 @@ function wireTaskPoolForm(
   const mode = () => form.querySelector<HTMLInputElement>('input[name=mode]:checked')?.value ?? 'lead';
 
   function syncLead(): void {
-    const ids = selectedBotIds(form);
+    const selectedIds = selectedBotIds(form);
+    const ids = taskPool?.chatId && taskPool.leadLarkAppId && !selectedIds.includes(taskPool.leadLarkAppId)
+      ? [taskPool.leadLarkAppId, ...selectedIds]
+      : selectedIds;
     const leadNeeded = mode() === 'lead';
     leadRow.hidden = !leadNeeded;
     if (!leadNeeded) return;
@@ -483,7 +488,8 @@ function wireTaskPoolForm(
   form.onsubmit = async ev => {
     ev.preventDefault();
     const fd = new FormData(form);
-    const larkAppIds = selectedBotIds(form);
+    const groupManaged = !!taskPool?.chatId;
+    const larkAppIds = groupManaged ? taskPool.larkAppIds : selectedBotIds(form);
     const taskPoolMode = String(fd.get('mode') ?? 'lead') as TaskPoolMode;
     const body = {
       title: String(fd.get('title') ?? '').trim(),

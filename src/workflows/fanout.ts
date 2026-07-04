@@ -90,14 +90,26 @@ export class WorkflowEventWatcher {
       await writeFile(this.log.eventsFile, '', { flag: 'a' });
     }
     this.lastSeq = await this.log.currentSeq();
+    let pollIntervalMs = this.opts.pollIntervalMs ?? 5_000;
     if (this.opts.useFsWatch !== false) {
-      this.watcher = watch(this.log.eventsFile, { persistent: false }, () => {
-        void this.drain();
-      });
+      try {
+        const watcher = watch(this.log.eventsFile, { persistent: false }, () => {
+          void this.drain();
+        });
+        watcher.on('error', err => {
+          logger.warn(`[workflow:${this.runId}] fs.watch error; relying on polling: ${err}`);
+          watcher.close();
+          if (this.watcher === watcher) this.watcher = undefined;
+        });
+        this.watcher = watcher;
+      } catch (err) {
+        logger.warn(`[workflow:${this.runId}] fs.watch unavailable; falling back to polling: ${err}`);
+        pollIntervalMs = Math.min(this.opts.pollIntervalMs ?? 250, 250);
+      }
     }
     this.pollTimer = setInterval(() => {
       void this.drain();
-    }, this.opts.pollIntervalMs ?? 5_000);
+    }, pollIntervalMs);
     this.pollTimer.unref?.();
   }
 }

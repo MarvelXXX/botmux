@@ -77,6 +77,7 @@ import {
 import { createDaemonInternalApi } from './dashboard/daemon-internal-api.js';
 import { listTeamReports, readTeamBoard, setTeamBoardEntry } from './services/team-board-store.js';
 import {
+  beginTaskPoolStart,
   createTaskPool,
   defaultTaskPoolTitle,
   deleteTaskPool,
@@ -611,6 +612,8 @@ interface DashboardSessionCreateRequest {
   leadLarkAppId?: unknown;
   name?: unknown;
   bindWorkingDir?: unknown;
+  existingChatId?: unknown;
+  existingShareLink?: unknown;
 }
 
 async function createDashboardSession(parsed: DashboardSessionCreateRequest): Promise<{
@@ -653,33 +656,45 @@ async function createDashboardSession(parsed: DashboardSessionCreateRequest): Pr
   const userOpenId = allowed.find(u => u.startsWith('ou_'));
   const ownerUnionIds = allowed.filter(u => u.startsWith('on_'));
 
-  let groupResp: any = null;
-  try {
-    const groupUpstream = await proxyToDaemon(creatorLarkAppId, '/api/groups/create', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        larkAppIds: selectedIds,
-        userOpenIds: userOpenId ? [userOpenId] : [],
-        ownerUnionIds,
-        transferOwnerTo: userOpenId,
-        notifyOwnerOpenId: userOpenId,
-        bindWorkingDir,
-      }),
-    });
-    groupResp = await groupUpstream.json().catch(() => null);
-    if (!groupUpstream.ok || !groupResp?.ok || typeof groupResp.chatId !== 'string') {
-      return {
-        status: 502,
-        body: { ok: false, error: groupResp?.error ?? `group_create_http_${groupUpstream.status}` },
-      };
+  const existingChatId = typeof parsed.existingChatId === 'string' && parsed.existingChatId.trim()
+    ? parsed.existingChatId.trim()
+    : '';
+  const existingShareLink = typeof parsed.existingShareLink === 'string' && parsed.existingShareLink.trim()
+    ? parsed.existingShareLink.trim()
+    : undefined;
+  let chatId = existingChatId;
+  let shareLink: unknown = existingShareLink;
+  let invalidBotIds: string[] = [];
+  if (!chatId) {
+    let groupResp: any = null;
+    try {
+      const groupUpstream = await proxyToDaemon(creatorLarkAppId, '/api/groups/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          larkAppIds: selectedIds,
+          userOpenIds: userOpenId ? [userOpenId] : [],
+          ownerUnionIds,
+          transferOwnerTo: userOpenId,
+          notifyOwnerOpenId: userOpenId,
+          bindWorkingDir,
+        }),
+      });
+      groupResp = await groupUpstream.json().catch(() => null);
+      if (!groupUpstream.ok || !groupResp?.ok || typeof groupResp.chatId !== 'string') {
+        return {
+          status: 502,
+          body: { ok: false, error: groupResp?.error ?? `group_create_http_${groupUpstream.status}` },
+        };
+      }
+    } catch {
+      return { status: 502, body: { ok: false, error: 'group_create_proxy_failed' } };
     }
-  } catch {
-    return { status: 502, body: { ok: false, error: 'group_create_proxy_failed' } };
+    chatId = groupResp.chatId;
+    shareLink = groupResp.shareLink;
+    invalidBotIds = Array.isArray(groupResp.invalidBotIds) ? groupResp.invalidBotIds : [];
   }
-  const chatId: string = groupResp.chatId;
-  const invalidBotIds: string[] = Array.isArray(groupResp.invalidBotIds) ? groupResp.invalidBotIds : [];
 
   const joinedIds = selectedIds.filter(id => !invalidBotIds.includes(id) && !!registry.getByAppId(id));
   const targets = mode === 'lead'
@@ -688,7 +703,7 @@ async function createDashboardSession(parsed: DashboardSessionCreateRequest): Pr
   if (targets.length === 0) {
     return {
       status: 200,
-      body: { ok: true, chatId, shareLink: groupResp.shareLink, spawned: [], failed: [], warning: 'no_spawn_target' },
+      body: { ok: true, chatId, shareLink, spawned: [], failed: [], warning: 'no_spawn_target' },
     };
   }
 
@@ -722,7 +737,7 @@ async function createDashboardSession(parsed: DashboardSessionCreateRequest): Pr
     body: {
       ok: true,
       chatId,
-      shareLink: groupResp.shareLink,
+      shareLink,
       mode,
       column,
       spawned,
@@ -2703,20 +2718,38 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'POST' && (mTaskPool = url.pathname.match(/^\/api\/task_pool\/([^/]+)\/start$/))) {
       const taskPoolId = decodeURIComponent(mTaskPool[1]);
-      const taskPool = getTaskPool(taskPoolId);
-      if (!taskPool) return jsonRes(res, 404, { ok: false, error: 'task_pool_not_found' });
-      if (taskPool.status === 'in_progress' && taskPool.chatId) {
-        return jsonRes(res, 409, { ok: false, error: 'task_pool_already_started', taskPool });
+      const claim = beginTaskPoolStart(taskPoolId);
+      if (!claim.ok) {
+        if (claim.reason === 'not_found') return jsonRes(res, 404, { ok: false, error: 'task_pool_not_found' });
+        if (claim.reason === 'archived') return jsonRes(res, 409, { ok: false, error: 'task_pool_archived', taskPool: claim.taskPool });
+        return jsonRes(res, 409, {
+          ok: false,
+          error: claim.reason === 'already_started' ? 'task_pool_already_started' : 'task_pool_start_in_flight',
+          taskPool: claim.taskPool,
+        });
       }
-      const result = await createDashboardSession({
-        content: taskPool.prompt,
-        larkAppIds: taskPool.larkAppIds,
-        mode: taskPool.mode,
-        column: taskPool.column,
+      const taskPool = claim.taskPool;
+      let result: { status: number; body: Record<string, unknown> };
+      try {
+        result = await createDashboardSession({
+          content: taskPool.prompt,
+          larkAppIds: taskPool.larkAppIds,
+          mode: taskPool.mode,
+          column: taskPool.column,
         leadLarkAppId: taskPool.leadLarkAppId,
         name: taskPool.groupName || taskPool.title,
         bindWorkingDir: taskPool.bindWorkingDir,
+        existingChatId: taskPool.chatId,
+        existingShareLink: taskPool.shareLink,
       });
+      } catch (e: any) {
+        const updated = recordTaskPoolStart(taskPoolId, {
+          status: 'pending',
+          spawned: [],
+          failed: [{ larkAppId: 'dashboard', error: e?.message ?? String(e ?? 'start_failed') }],
+        });
+        return jsonRes(res, 500, { ok: false, error: 'task_pool_start_failed', taskPool: updated ?? taskPool });
+      }
       const body = result.body as {
         ok?: unknown;
         error?: unknown;
@@ -2724,17 +2757,23 @@ const server = createServer(async (req, res) => {
         shareLink?: unknown;
         spawned?: unknown;
         failed?: unknown;
+        warning?: unknown;
       };
-      const started = body.ok === true;
+      const spawned = Array.isArray(body.spawned) ? body.spawned.filter((x): x is string => typeof x === 'string') : [];
+      const failed = Array.isArray(body.failed)
+        ? body.failed.filter((x): x is { larkAppId: string; error: string } =>
+          !!x && typeof x === 'object' && typeof x.larkAppId === 'string' && typeof x.error === 'string')
+        : [];
+      const started = body.ok === true && spawned.length > 0;
+      const keepChatLink = typeof body.chatId === 'string' && body.chatId.length > 0;
       const updated = recordTaskPoolStart(taskPoolId, {
         status: started ? 'in_progress' : 'pending',
-        chatId: typeof body.chatId === 'string' ? body.chatId : undefined,
-        shareLink: typeof body.shareLink === 'string' ? body.shareLink : undefined,
-        spawned: Array.isArray(body.spawned) ? body.spawned.filter((x): x is string => typeof x === 'string') : [],
-        failed: Array.isArray(body.failed)
-          ? body.failed.filter((x): x is { larkAppId: string; error: string } =>
-            !!x && typeof x === 'object' && typeof x.larkAppId === 'string' && typeof x.error === 'string')
-          : (started ? [] : [{ larkAppId: 'dashboard', error: String(body.error ?? 'start_failed') }]),
+        chatId: keepChatLink && typeof body.chatId === 'string' ? body.chatId : undefined,
+        shareLink: keepChatLink && typeof body.shareLink === 'string' ? body.shareLink : undefined,
+        spawned,
+        failed: failed.length > 0
+          ? failed
+          : (started ? [] : [{ larkAppId: 'dashboard', error: String(body.error ?? body.warning ?? 'start_failed') }]),
       });
       return jsonRes(res, result.status, { ...result.body, taskPool: updated ?? taskPool });
     }

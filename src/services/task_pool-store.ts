@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { atomicWriteFileSync } from '../utils/atomic-write.js';
+import { withFileLockSync } from '../utils/file-lock.js';
 import { config } from '../config.js';
 
 export type DashboardTaskPoolStatus = 'draft' | 'pending' | 'in_progress' | 'done' | 'archived';
@@ -51,6 +52,10 @@ export type DashboardTaskPoolUpdatePatch = Partial<Pick<
   'title' | 'prompt' | 'larkAppIds' | 'mode' | 'column' | 'priority' | 'leadLarkAppId' | 'groupName' | 'bindWorkingDir' | 'status'
 >>;
 
+export type DashboardTaskPoolStartClaim =
+  | { ok: true; taskPool: DashboardTaskPool }
+  | { ok: false; reason: 'not_found' | 'already_started' | 'start_in_flight' | 'archived'; taskPool?: DashboardTaskPool };
+
 interface TaskPoolStoreCacheEntry {
   mtimeMs: number;
   ctimeMs: number;
@@ -59,9 +64,17 @@ interface TaskPoolStoreCacheEntry {
 }
 
 const taskPoolStoreCache = new Map<string, TaskPoolStoreCacheEntry>();
+const TASK_POOL_LOCK_TIMEOUT_MS = 5_000;
+const TASK_POOL_START_CLAIM_TTL_MS = 10 * 60 * 1000;
 
 function storePath(dataDir: string = config.session.dataDir): string {
   return join(dataDir, 'task_pool.json');
+}
+
+function withTaskPoolStoreLock<T>(dataDir: string, fn: () => T): T {
+  const fp = storePath(dataDir);
+  mkdirSync(dirname(fp), { recursive: true });
+  return withFileLockSync(fp, fn, { maxWaitMs: TASK_POOL_LOCK_TIMEOUT_MS });
 }
 
 function emptyStore(): DashboardTaskPoolStoreFile {
@@ -239,27 +252,29 @@ export function getTaskPool(id: string, dataDir: string = config.session.dataDir
 }
 
 export function createTaskPool(input: DashboardTaskPoolCreateInput, dataDir: string = config.session.dataDir): DashboardTaskPool {
-  const now = new Date().toISOString();
-  const prompt = input.prompt.trim();
-  const taskPool: DashboardTaskPool = {
-    id: `tp_${randomUUID()}`,
-    title: input.title.trim() || defaultTaskPoolTitle(prompt),
-    prompt,
-    larkAppIds: Array.from(new Set(input.larkAppIds.map(id => id.trim()).filter(Boolean))),
-    mode: input.mode,
-    column: input.column,
-    status: 'draft',
-    priority: normalizePriority(input.priority),
-    createdAt: now,
-    updatedAt: now,
-  };
-  if (input.leadLarkAppId && taskPool.larkAppIds.includes(input.leadLarkAppId)) taskPool.leadLarkAppId = input.leadLarkAppId;
-  if (input.groupName?.trim()) taskPool.groupName = input.groupName.trim().slice(0, 60);
-  if (input.bindWorkingDir?.trim()) taskPool.bindWorkingDir = input.bindWorkingDir.trim();
-  const store = cloneStore(readCachedTaskPoolStore(dataDir));
-  store.taskPools.push(taskPool);
-  writeTaskPoolStore(dataDir, store);
-  return cloneTaskPool(taskPool);
+  return withTaskPoolStoreLock(dataDir, () => {
+    const now = new Date().toISOString();
+    const prompt = input.prompt.trim();
+    const taskPool: DashboardTaskPool = {
+      id: `tp_${randomUUID()}`,
+      title: input.title.trim() || defaultTaskPoolTitle(prompt),
+      prompt,
+      larkAppIds: Array.from(new Set(input.larkAppIds.map(id => id.trim()).filter(Boolean))),
+      mode: input.mode,
+      column: input.column,
+      status: 'draft',
+      priority: normalizePriority(input.priority),
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (input.leadLarkAppId && taskPool.larkAppIds.includes(input.leadLarkAppId)) taskPool.leadLarkAppId = input.leadLarkAppId;
+    if (input.groupName?.trim()) taskPool.groupName = input.groupName.trim().slice(0, 60);
+    if (input.bindWorkingDir?.trim()) taskPool.bindWorkingDir = input.bindWorkingDir.trim();
+    const store = cloneStore(readCachedTaskPoolStore(dataDir));
+    store.taskPools.push(taskPool);
+    writeTaskPoolStore(dataDir, store);
+    return cloneTaskPool(taskPool);
+  });
 }
 
 export function updateTaskPool(
@@ -267,57 +282,94 @@ export function updateTaskPool(
   patch: DashboardTaskPoolUpdatePatch,
   dataDir: string = config.session.dataDir,
 ): DashboardTaskPool | null {
-  const store = cloneStore(readCachedTaskPoolStore(dataDir));
-  const idx = store.taskPools.findIndex(taskPool => taskPool.id === id);
-  if (idx < 0) return null;
-  const current = store.taskPools[idx];
-  const next: DashboardTaskPool = {
-    ...current,
-    updatedAt: new Date().toISOString(),
-  };
-  if (typeof patch.title === 'string') next.title = patch.title.trim().slice(0, 120) || defaultTaskPoolTitle(next.prompt);
-  if (typeof patch.prompt === 'string' && patch.prompt.trim()) {
-    next.prompt = patch.prompt.trim().slice(0, 40_000);
-    if (!next.title.trim()) next.title = defaultTaskPoolTitle(next.prompt);
-  }
-  if (Array.isArray(patch.larkAppIds)) {
-    next.larkAppIds = Array.from(new Set(patch.larkAppIds.map(id => String(id).trim()).filter(Boolean)));
-    if (next.leadLarkAppId && !next.larkAppIds.includes(next.leadLarkAppId)) delete next.leadLarkAppId;
-  }
-  if (patch.mode === 'lead' || patch.mode === 'all') next.mode = patch.mode;
-  if (patch.column === 'in_progress' || patch.column === 'backlog') next.column = patch.column;
-  if (patch.priority === 'P0' || patch.priority === 'P1' || patch.priority === 'P2' || patch.priority === 'P3') {
-    next.priority = patch.priority;
-  }
-  if (typeof patch.leadLarkAppId === 'string') {
-    const lead = patch.leadLarkAppId.trim();
-    if (lead && next.larkAppIds.includes(lead)) next.leadLarkAppId = lead;
-    else delete next.leadLarkAppId;
-  }
-  if (typeof patch.groupName === 'string') {
-    const value = patch.groupName.trim().slice(0, 60);
-    if (value) next.groupName = value;
-    else delete next.groupName;
-  }
-  if (typeof patch.bindWorkingDir === 'string') {
-    const value = patch.bindWorkingDir.trim();
-    if (value) next.bindWorkingDir = value;
-    else delete next.bindWorkingDir;
-  }
-  if (
-    patch.status === 'draft' ||
-    patch.status === 'pending' ||
-    patch.status === 'in_progress' ||
-    patch.status === 'done' ||
-    patch.status === 'archived'
-  ) {
-    next.status = patch.status;
-    if (patch.status === 'done' || patch.status === 'archived') next.closedAt = next.updatedAt;
-    else delete next.closedAt;
-  }
-  store.taskPools[idx] = next;
-  writeTaskPoolStore(dataDir, store);
-  return cloneTaskPool(next);
+  return withTaskPoolStoreLock(dataDir, () => {
+    const store = cloneStore(readCachedTaskPoolStore(dataDir));
+    const idx = store.taskPools.findIndex(taskPool => taskPool.id === id);
+    if (idx < 0) return null;
+    const current = store.taskPools[idx];
+    const next: DashboardTaskPool = {
+      ...current,
+      updatedAt: new Date().toISOString(),
+    };
+    if (typeof patch.title === 'string') next.title = patch.title.trim().slice(0, 120) || defaultTaskPoolTitle(next.prompt);
+    if (typeof patch.prompt === 'string' && patch.prompt.trim()) {
+      next.prompt = patch.prompt.trim().slice(0, 40_000);
+      if (!next.title.trim()) next.title = defaultTaskPoolTitle(next.prompt);
+    }
+    if (Array.isArray(patch.larkAppIds)) {
+      next.larkAppIds = Array.from(new Set(patch.larkAppIds.map(id => String(id).trim()).filter(Boolean)));
+      if (next.leadLarkAppId && !next.larkAppIds.includes(next.leadLarkAppId)) delete next.leadLarkAppId;
+    }
+    if (patch.mode === 'lead' || patch.mode === 'all') next.mode = patch.mode;
+    if (patch.column === 'in_progress' || patch.column === 'backlog') next.column = patch.column;
+    if (patch.priority === 'P0' || patch.priority === 'P1' || patch.priority === 'P2' || patch.priority === 'P3') {
+      next.priority = patch.priority;
+    }
+    if (typeof patch.leadLarkAppId === 'string') {
+      const lead = patch.leadLarkAppId.trim();
+      if (lead && next.larkAppIds.includes(lead)) next.leadLarkAppId = lead;
+      else delete next.leadLarkAppId;
+    }
+    if (typeof patch.groupName === 'string') {
+      const value = patch.groupName.trim().slice(0, 60);
+      if (value) next.groupName = value;
+      else delete next.groupName;
+    }
+    if (typeof patch.bindWorkingDir === 'string') {
+      const value = patch.bindWorkingDir.trim();
+      if (value) next.bindWorkingDir = value;
+      else delete next.bindWorkingDir;
+    }
+    if (
+      patch.status === 'draft' ||
+      patch.status === 'pending' ||
+      patch.status === 'in_progress' ||
+      patch.status === 'done' ||
+      patch.status === 'archived'
+    ) {
+      next.status = patch.status;
+      if (patch.status === 'done' || patch.status === 'archived') next.closedAt = next.updatedAt;
+      else delete next.closedAt;
+    }
+    store.taskPools[idx] = next;
+    writeTaskPoolStore(dataDir, store);
+    return cloneTaskPool(next);
+  });
+}
+
+export function beginTaskPoolStart(id: string, dataDir: string = config.session.dataDir): DashboardTaskPoolStartClaim {
+  return withTaskPoolStoreLock(dataDir, () => {
+    const store = cloneStore(readCachedTaskPoolStore(dataDir));
+    const idx = store.taskPools.findIndex(taskPool => taskPool.id === id);
+    if (idx < 0) return { ok: false, reason: 'not_found' };
+    const current = store.taskPools[idx];
+    if (current.status === 'archived') {
+      return { ok: false, reason: 'archived', taskPool: cloneTaskPool(current) };
+    }
+    if (current.status === 'in_progress' && current.chatId) {
+      return { ok: false, reason: 'already_started', taskPool: cloneTaskPool(current) };
+    }
+    const claimAgeMs = current.startedAt ? Date.now() - Date.parse(current.startedAt) : 0;
+    const hasFreshClaim = current.status === 'pending' &&
+      !!current.startedAt &&
+      Number.isFinite(claimAgeMs) &&
+      claimAgeMs < TASK_POOL_START_CLAIM_TTL_MS &&
+      (current.failed?.length ?? 0) === 0;
+    if (hasFreshClaim) {
+      return { ok: false, reason: 'start_in_flight', taskPool: cloneTaskPool(current) };
+    }
+    const now = new Date().toISOString();
+    const next: DashboardTaskPool = {
+      ...current,
+      status: 'pending',
+      failed: [],
+      updatedAt: now,
+      startedAt: now,
+    };
+    store.taskPools[idx] = next;
+    writeTaskPoolStore(dataDir, store);
+    return { ok: true, taskPool: cloneTaskPool(next) };
+  });
 }
 
 export function recordTaskPoolStart(
@@ -331,30 +383,34 @@ export function recordTaskPoolStart(
   },
   dataDir: string = config.session.dataDir,
 ): DashboardTaskPool | null {
-  const store = cloneStore(readCachedTaskPoolStore(dataDir));
-  const idx = store.taskPools.findIndex(taskPool => taskPool.id === id);
-  if (idx < 0) return null;
-  const now = new Date().toISOString();
-  const next: DashboardTaskPool = {
-    ...store.taskPools[idx],
-    status: result.status,
-    updatedAt: now,
-    startedAt: now,
-  };
-  if (result.chatId) next.chatId = result.chatId;
-  if (result.shareLink) next.shareLink = result.shareLink;
-  next.spawned = result.spawned ?? [];
-  next.failed = result.failed ?? [];
-  store.taskPools[idx] = next;
-  writeTaskPoolStore(dataDir, store);
-  return cloneTaskPool(next);
+  return withTaskPoolStoreLock(dataDir, () => {
+    const store = cloneStore(readCachedTaskPoolStore(dataDir));
+    const idx = store.taskPools.findIndex(taskPool => taskPool.id === id);
+    if (idx < 0) return null;
+    const now = new Date().toISOString();
+    const next: DashboardTaskPool = {
+      ...store.taskPools[idx],
+      status: result.status,
+      updatedAt: now,
+      startedAt: store.taskPools[idx].startedAt ?? now,
+    };
+    if (result.chatId) next.chatId = result.chatId;
+    if (result.shareLink) next.shareLink = result.shareLink;
+    next.spawned = result.spawned ?? [];
+    next.failed = result.failed ?? [];
+    store.taskPools[idx] = next;
+    writeTaskPoolStore(dataDir, store);
+    return cloneTaskPool(next);
+  });
 }
 
 export function deleteTaskPool(id: string, dataDir: string = config.session.dataDir): boolean {
-  const store = cloneStore(readCachedTaskPoolStore(dataDir));
-  const before = store.taskPools.length;
-  store.taskPools = store.taskPools.filter(taskPool => taskPool.id !== id);
-  if (store.taskPools.length === before) return false;
-  writeTaskPoolStore(dataDir, store);
-  return true;
+  return withTaskPoolStoreLock(dataDir, () => {
+    const store = cloneStore(readCachedTaskPoolStore(dataDir));
+    const before = store.taskPools.length;
+    store.taskPools = store.taskPools.filter(taskPool => taskPool.id !== id);
+    if (store.taskPools.length === before) return false;
+    writeTaskPoolStore(dataDir, store);
+    return true;
+  });
 }

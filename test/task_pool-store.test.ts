@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  beginTaskPoolStart,
   createTaskPool,
   getTaskPool,
   listTaskPools,
@@ -124,5 +125,43 @@ describe('task_pool-store', () => {
 
     expect(getTaskPool(task_pool.id, dataDir)?.title).toBe('Cached task_pool');
     expect(getTaskPool(task_pool.id, dataDir)?.larkAppIds).toEqual(['bot_a']);
+  });
+
+  it('claims task start before async group creation and allows retry after failure', () => {
+    const dataDir = tempDataDir();
+    const taskPool = createTaskPool({
+      title: 'Start once',
+      prompt: 'create a group',
+      larkAppIds: ['bot_a'],
+      mode: 'lead',
+      column: 'in_progress',
+      leadLarkAppId: 'bot_a',
+    }, dataDir);
+
+    const first = beginTaskPoolStart(taskPool.id, dataDir);
+    expect(first.ok).toBe(true);
+    expect(first.ok && first.taskPool.status).toBe('pending');
+    expect(first.ok && first.taskPool.failed).toEqual([]);
+    const claimedStartedAt = first.ok ? first.taskPool.startedAt : undefined;
+    expect(claimedStartedAt).toBeTruthy();
+
+    const second = beginTaskPoolStart(taskPool.id, dataDir);
+    expect(second.ok).toBe(false);
+    expect(!second.ok && second.reason).toBe('start_in_flight');
+
+    const failedStart = recordTaskPoolStart(taskPool.id, {
+      status: 'pending',
+      failed: [{ larkAppId: 'dashboard', error: 'group_create_failed' }],
+    }, dataDir);
+    expect(failedStart?.startedAt).toBe(claimedStartedAt);
+
+    const retry = beginTaskPoolStart(taskPool.id, dataDir);
+    expect(retry.ok).toBe(true);
+    expect(retry.ok && retry.taskPool.failed).toEqual([]);
+
+    updateTaskPool(taskPool.id, { status: 'archived' }, dataDir);
+    const archived = beginTaskPoolStart(taskPool.id, dataDir);
+    expect(archived.ok).toBe(false);
+    expect(!archived.ok && archived.reason).toBe('archived');
   });
 });
