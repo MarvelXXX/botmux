@@ -20,7 +20,3 @@ export function codexHistoryPath(): string {
 export function codexSessionsRoot(): string {
   return join(codexHome(), 'sessions');
 }
-
-export function codexArchivedSessionsRoot(): string {
-  return join(codexHome(), 'archived_sessions');
-}

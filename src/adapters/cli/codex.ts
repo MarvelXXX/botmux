@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { resolveCommand } from './registry.js';
 import { BOTMUX_SHELL_HINTS } from './shared-hints.js';
 import type { CliAdapter, PtyHandle } from './types.js';
-import { codexArchivedSessionsRoot, codexHistoryPath, codexHome, codexSessionsRoot } from '../../services/codex-paths.js';
+import { codexHistoryPath, codexHome, codexSessionsRoot } from '../../services/codex-paths.js';
 import { discoverRolloutSessions } from '../../services/resumable-session-discovery.js';
 import { delay, scaleMs } from '../../utils/timing.js';
 
@@ -162,10 +162,10 @@ export function createCodexAdapter(pathOverride?: string): CliAdapter {
       return `codex resume ${sid}`;
     },
 
-    /** Import path: scan Codex rollout files, including archived sessions.
-     *  `session_meta` carries the resume id + cwd. */
+    /** Import path: scan the rollout files under `<CODEX_HOME>/sessions` for
+     *  resumable sessions (session_meta carries the resume id + cwd). */
     listResumableSessions({ limit, exclude }) {
-      return discoverRolloutSessions([codexSessionsRoot(), codexArchivedSessionsRoot()], limit, exclude);
+      return discoverRolloutSessions(codexSessionsRoot(), limit, exclude);
     },
 
     async writeInput(pty: PtyHandle, content: string) {

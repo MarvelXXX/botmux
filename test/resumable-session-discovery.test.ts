@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -183,12 +183,10 @@ describe('discoverRolloutSessions (codex / traex)', () => {
   let sessionsRoot: string;
   beforeEach(() => { sessionsRoot = tmp('bmx-rollout-'); });
 
-  function writeRollout(relDir: string, name: string, lines: unknown[]): string {
+  function writeRollout(relDir: string, name: string, lines: unknown[]): void {
     const dir = join(sessionsRoot, relDir);
     mkdirSync(dir, { recursive: true });
-    const path = join(dir, name);
-    writeFileSync(path, jsonl(...lines));
-    return path;
+    writeFileSync(join(dir, name), jsonl(...lines));
   }
 
   it('reads resume id + cwd from session_meta and title from the first user_message event', async () => {
@@ -326,32 +324,6 @@ describe('discoverRolloutSessions (codex / traex)', () => {
     const out = await discoverRolloutSessions(sessionsRoot, 2, exclude);
     expect(out).toHaveLength(2);
     expect(out.every((s) => !exclude.has(s.cliSessionId))).toBe(true);
-  });
-
-  it('can scan archived rollout roots and de-dupes resumed copies by session id', async () => {
-    const archivedRoot = tmp('bmx-rollout-archived-');
-    const oldCopy = writeRollout('2026/07/01', 'rollout-old-copy.jsonl', [
-      { type: 'session_meta', payload: { id: 'same-rollout', cwd: '/root/old' } },
-      { type: 'event_msg', payload: { type: 'user_message', message: 'old title' } },
-    ]);
-    const archivedDir = join(archivedRoot);
-    mkdirSync(archivedDir, { recursive: true });
-    const archived = join(archivedDir, 'rollout-archived.jsonl');
-    writeFileSync(archived, jsonl(
-      { type: 'session_meta', payload: { id: 'archived-rollout', cwd: '/root/archived' } },
-      { type: 'event_msg', payload: { type: 'user_message', message: 'archived title' } },
-    ));
-    const newCopy = writeRollout('2026/07/02', 'rollout-new-copy.jsonl', [
-      { type: 'session_meta', payload: { id: 'same-rollout', cwd: '/root/new' } },
-      { type: 'event_msg', payload: { type: 'user_message', message: 'new title' } },
-    ]);
-    utimesSync(oldCopy, new Date(1_000), new Date(1_000));
-    utimesSync(archived, new Date(2_000), new Date(2_000));
-    utimesSync(newCopy, new Date(3_000), new Date(3_000));
-
-    const out = await discoverRolloutSessions([sessionsRoot, archivedRoot], 10);
-    expect(out.map((s) => s.cliSessionId)).toEqual(['same-rollout', 'archived-rollout']);
-    expect(out[0]).toMatchObject({ cwd: '/root/new', title: 'new title' });
   });
 
   it('drops rollouts missing session_meta id/cwd', async () => {
