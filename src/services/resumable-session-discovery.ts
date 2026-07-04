@@ -8,6 +8,7 @@
  * Three storage shapes are covered (one parser each, shared across CLIs):
  *   - Claude-family JSONL  (`claude-code`, `seed`, `relay`): <dataDir>/projects/<hash>/<id>.jsonl
  *   - Codex/TRAE rollout   (`codex`, `traex`):       <sessionsRoot>/YYYY/MM/DD/rollout-*.jsonl
+ *                                                     or archived flat rollout files
  *   - Antigravity history  (`antigravity`):          <home>/history.jsonl (flat submit log)
  *
  * All scans are daemon-side, pure filesystem (no PTY / subprocess), and run
@@ -291,7 +292,7 @@ async function parseRolloutTranscript(
 }
 
 export async function discoverRolloutSessions(
-  sessionsRoot: string,
+  sessionsRoot: string | readonly string[],
   limit: number,
   exclude?: ReadonlySet<string>,
 ): Promise<ResumableSession[]> {
@@ -299,12 +300,19 @@ export async function discoverRolloutSessions(
   // by name. Instead walk most-recent-first and parse until `limit` non-excluded
   // sessions are collected — excluded ones cost only a first-line read, so a
   // host with many live sessions doesn't starve the picker.
-  const files = await collectRecentJsonl(sessionsRoot, Number.MAX_SAFE_INTEGER, 5);
+  const roots = Array.isArray(sessionsRoot) ? sessionsRoot : [sessionsRoot];
+  const collected = await Promise.all(
+    roots.map((root) => collectRecentJsonl(root, Number.MAX_SAFE_INTEGER, 5)),
+  );
+  const files = collected.flat().sort((a, b) => b.mtimeMs - a.mtimeMs);
   const out: ResumableSession[] = [];
+  const seen = new Set<string>();
   for (const f of files) {
     if (out.length >= limit) break;
     const s = await parseRolloutTranscript(f.path, f.mtimeMs, exclude);
+    if (s && seen.has(s.cliSessionId)) continue;
     if (s) out.push(s);
+    if (s) seen.add(s.cliSessionId);
   }
   return out;
 }
